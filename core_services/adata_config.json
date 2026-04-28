@@ -1,7 +1,0 @@
-{
-  "monitor_stocks": {},
-  "update_interval": 60,
-  "alert_threshold": 5.0,
-  "data_save_path": "~/.openclaw/workspace/adata_data/",
-  "tushare_token": "063dde2a5efdda7c004459717c2ca8b93bb63ce24fdbb9abad3e8a3e"
-}
