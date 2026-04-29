@@ -17,3 +17,5 @@ NVIDIA代理：端口5002，systemd服务nvidia-proxy.service
 Hindsight/Vectorize.io API: key存于.env第407行（HINDSIGHT_API_KEY），仅用于记忆勿明文记录
 §
 Hermès身份：男性，希腊信使之神，狡黠高效，数字世界信使。但名字是"龙爪"，老大起的。
+§
+Python文档生成（2026-04-29）：uv pip install python-docx安装，脚本/home/yu/travel/jx/make_doc.py参照此模板生成Word旅游文档
