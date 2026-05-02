@@ -25,3 +25,15 @@ Python文档生成（2026-04-29）：uv pip install python-docx安装，脚本/h
 老三(NAS)：192.168.31.10 = FNOS V1.1.30（升级中），openclaw-gateway在其上运行。SSH用id_ed25519_new密钥，用户YDL（skill: nas-sharebox-access）
 §
 FNOS升级卡住根因：/usr/trim/etc/machine_id有immutable(i)属性，升级时mv失败→initramfs不完整→重启卡住。已在NAS部署watchdog服务（/home/YDL/machine_id_watchdog.sh + user systemd service），下次升级时验证：①liveupdate启动时immutable被移除②重启后immutable恢复③升级顺利完成
+§
+YouTube字幕抓取：youtube-transcript-api用法 api.fetch('video_id', languages=['zh'])，语言代码用'zh'不是'zh-Hans'。venv路径：/home/yu/.hermes/hermes-agent/venv/bin/python3，用uv pip install装包。
+§
+主路由：192.168.31.1，用户root，密码123456（OpenWRT软路由）
+§
+安格世界 Clash 仓库：https://github.com/liandu2024/clash（Fork 1.8k大仓库，基于甬哥ygkkk）
+  - ini/ 目录：OpenClash配置文件
+  - list/ 目录：规则列表
+  - main_router/、second_router/：多路由配置
+  - little/yaml/：yaml格式配置文件（另一目录）
+§
+图片分析：mmx vision describe /path/to/image，不用 vision_analyze 工具
