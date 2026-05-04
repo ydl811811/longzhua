@@ -34,7 +34,7 @@ YouTube字幕抓取：youtube-transcript-api用法 api.fetch('video_id', languag
   - main_router/、second_router/：多路由配置
   - little/yaml/：yaml格式配置文件（另一目录）
 §
-图片分析：mmx vision describe /path/to/image，不用 vision_analyze 工具
+一次性事务（快递等）只提醒一次，不建定时任务。
 §
 阿里云盘SSL错误-3711：OpenClash的HTTPS重签名证书不被阿里云盘客户端信任，导致TLS握手失败。解决方案是加直连规则（aliyundrive.com/alibaba.com/alibabausercontent.com/darabonba.com），不经过代理。参考skill: ange-world-perspective/references/troubleshooting.md
 §
