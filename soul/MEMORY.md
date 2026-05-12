@@ -28,17 +28,11 @@ YouTube字幕抓取：youtube-transcript-api，venv路径/home/yu/.hermes/hermes
 §
 主路由：192.168.31.1，用户root，密码123456（OpenWRT软路由）
 §
-安格世界 Clash 仓库：https://github.com/liandu2024/clash（Fork 1.8k大仓库，基于甬哥ygkkk）
-  - ini/ 目录：OpenClash配置文件
-  - list/ 目录：规则列表
-  - main_router/、second_router/：多路由配置
-  - little/yaml/：yaml格式配置文件（另一目录）
-§
 一次性事务（快递等）只提醒一次，不建定时任务。
 §
 OpenClash规则漏洞：Ange_Clash_All_Fallback_Smart.yaml的`RULE-SET,Direct/Domain`指向安格私人Direct.list（几十条），不全。阿里云盘等国内域名落入MATCH→代理→SSL错误-3711。更好方案：mphin/ACL4SSR GlobalDirect.list（1199条），含完整阿里系/百度/微信/抖音等。
 §
-看图：用 mmx vision describe --image xxx，不要用 vision_analyze
+识图：auxiliary.vision已配SenseNova(sensenova-6.7-flash-lite)，vision_analyze走这个。若报token超限(>10240)，先用ffmpeg压缩：ffmpeg -i input.jpg -vf "scale=1024:1024:force_original_aspect_ratio=decrease" -update 1 input_small.jpg
 §
 网络调试：必须先抓baseline再让用户操作（controlled experiment），不能先让用户操作再回头查数据。流程：准备好对比框架→抓baseline→用户做动作→再抓→diff对比。路由排查时命令执行后必须验证返回了实际数据（空输出陷阱）。
 §
