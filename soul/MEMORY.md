@@ -26,8 +26,6 @@ YouTube字幕：youtube-transcript-api，venv /home/yu/.hermes/hermes-agent/venv
 §
 一次性事务（快递等）只提醒一次，不建定时任务。
 §
-OpenClash规则漏洞：Ange_Clash_All_Fallback_Smart.yaml的`RULE-SET,Direct/Domain`指向安格私人Direct.list（几十条），不全。阿里云盘等国内域名落入MATCH→代理→SSL错误-3711。更好方案：mphin/ACL4SSR GlobalDirect.list（1199条），含完整阿里系/百度/微信/抖音等。
-§
 识图：auxiliary.vision已配SenseNova(sensenova-6.7-flash-lite)，vision_analyze走这个。若报token超限(>10240)，先用ffmpeg压缩：ffmpeg -i input.jpg -vf "scale=1024:1024:force_original_aspect_ratio=decrease" -update 1 input_small.jpg
 §
 网络调试：必须先抓baseline再让用户操作（controlled experiment），不能先让用户操作再回头查数据。流程：准备好对比框架→抓baseline→用户做动作→再抓→diff对比。路由排查时命令执行后必须验证返回了实际数据（空输出陷阱）。
@@ -36,4 +34,4 @@ Lucky已装（v2.27.2），运行192.168.31.1:16601，账号666/666，Luci界面
 §
 灵爪飞书答非所问根因：灵爪feishu channel用app(cli_a93559e471b8dbd2)，与龙爪主飞书(ou_7cb0ccf9)不同应用，消息全路由agent:main:main。解法：删掉灵爪feishu channel重新配对（龙爪自身配置不动，只修灵爪）。
 §
-NAS watchdog systemd 服务名是 `machine-id-watchdog.service`（含连字符，不是下划线）
+nikki：profiles目录`/etc/nikki/profiles/`。yq启动时删`.dns.proxy-server-nameserver`等字段，`fake-ip-filter-mode: rule`可保留。踩坑：`respect-rules: true`+yq删空`proxy-server-nameserver`→mihomo报错无法启动，必须`false`。`Seven1_fallback_Rule-Set_Enhanced.yaml`在跑（原版备用）。
