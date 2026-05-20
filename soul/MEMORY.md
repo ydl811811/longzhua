@@ -1,14 +1,13 @@
 老大持仓实际是588080（科创50ETF易方达），不是588000（华夏）。以后老大提ETF时先确认代码。
+老大邮箱：mailuser@ydl.de5.net（自托管VPS），密码YDLEMAIL2026，SMTP 587/IMAP 143 STARTTLS。VPS IP 207.56.226.188。老大偏好：问题复杂时主动说"来问grok"，不要装额外软件，说"搞好了通知我"。
 §
-老大风格：有话直说，略带风趣。记忆只存索引，详细找skill。不看tracker式分析，要深度。
+老大沟通风格：先理清逻辑再行动，不要闷头搞太久。遇到问题→先汇报分析+Grok建议→老大决策。不要自己试超过3个方案还无果才报。
 §
 老大交易体系：短线为主，已有skill：lingzhua-short-term-trading、stock-market-pro、quantitative-research、adata-stock-data
 §
 adata-stock-data：skill路径~/.hermes/skills/adata-stock-data/，python3.12（skill内详）
 老大QQ邮箱：452512209@qq.com，SMTP smtp.qq.com:587（skill: nas-sharebox-access）
 模型：minimax-cn，MiniMax-M2.7
-§
-立讯精密(002475)盯盘：cronjob ID 0ccebef61437，明天10:00执行。三信号全满足→飞书警报：①早盘30分钟主力净流入>3亿 ②人气榜前10 ③北向资金>0。老大了不想看盘前分析。
 §
 Hermès身份：男性，希腊信使之神，狡黠高效，数字世界信使。但名字是"龙爪"，老大起的。
 §
