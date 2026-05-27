@@ -2,8 +2,6 @@
 §
 老大交易体系：短线为主，已有skill：lingzhua-short-term-trading、stock-market-pro、quantitative-research、adata-stock-data
 §
-adata-stock-data skill路径失效（~/.hermes/skills/adata-stock-data/ 不存在）。adata库实际在 /home/yu/.local/lib/python3.12/site-packages/adata（v2.9.5）。腾讯接口（qt.gtimg.cn）才是五档实时主力数据源，新浪接口（hq.sinajs.cn）备用。直接用python3.12调用，不依赖skill路径。
-§
 Hermès身份：男性，希腊信使之神，狡黠高效，数字世界信使。但名字是"龙爪"，老大起的。
 §
 老婆QQ邮箱：243966637@qq.com，发送旅游方案附件时用。QQ邮箱SMTP正常（授权码已存.env）。你老婆邮箱收到江西行程邮件后自动回复了一个iLink Bot配对码（G32MYWVZ），说明她邮箱也被绑定过配对系统。
@@ -24,7 +22,8 @@ nikki：profiles目录`/etc/nikki/profiles/`。yq启动时删`.dns.proxy-server-
 §
 adata库实际路径：/home/yu/.local/lib/python3.12/site-packages/adata（v2.9.5），skill目录不存在。直接python3.12调用，腾讯接口qt.gtimg.cn是五档实时主力源，新浪备用。
 §
-当前持仓（2026-05-26）：588080科创50ETF易方达(300股)、长江电力(200股)、劲拓股份(200股)、新劲刚(200股)、博实股份(400股@14.12)。候选：万集科技、三利谱、鼎胜新材。
-监控脚本在~/.hermes/scripts/，台账在~/.hermes/stock-portfolio/portfolio.yaml。ETF fund_alert有state=Done机制阻止后续批次触发，需手动重置state文件。alert条件必须匹配实时价格才能触发（博实股份今日案例：条件13.03~13.5但实际在14元区间，无法触发）。
+今日持仓（2026-05-27）：588080科创50ETF易方达(3000股@1.860)、512480半导体ETF(3500股@2.271)、鼎胜新材(200股@28.066)、捷捷微电(200股@36.345)、劲拓股份(300股@29.401)。博实股份@13.16止损亏-396.68。波段策略：ETF底仓+波段仓双层，TP触发出售，buy_target跌加仓。
 §
 5/26持仓更新：588080(300股)、长江电力(200)、劲拓股份(200)、博实股份(400股/新买入)。新劲刚已清仓。
+§
+老大证券App：东吴证券（账号6072结尾）。今日持仓（2026-05-27）：588080(3000股@1.860)、512480(3500股@2.271)、鼎胜新材(200@28.066)、捷捷微电(200@36.345)、劲拓股份(300@29.401)。博实股份已清仓亏-396.68。账户总资产58,771.66元，可用23,045元，仓位60.8%。波段策略：ETF底仓+波段仓，TP触发出售，buy_target跌加仓。
