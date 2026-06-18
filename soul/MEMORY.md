@@ -2,7 +2,7 @@
 §
 老大交易体系：短线为主，已有skill：lingzhua-short-term-trading、stock-market-pro、quantitative-research、adata-stock-data
 §
-MiniMax到期停用，主力切换至DeepSeek V4 Flash。base_url用OpenAI格式https://api.deepseek.com/v1（不可用/anthropic）。日常模型：deepseek-v4-flash，升级版：deepseek-v4-pro。API key sk-前缀。
+MiniMax到期日2026-07-16，**到期前一天（07-15）切换至DeepSeek V4 Flash**。DeepSeek base_url用OpenAI格式https://api.deepseek.com/v1，API key sk-前缀。
 §
 老婆QQ邮箱：243966637@qq.com，发送旅游方案附件时用。QQ邮箱SMTP正常（授权码已存.env）。你老婆邮箱收到江西行程邮件后自动回复了一个iLink Bot配对码（G32MYWVZ），说明她邮箱也被绑定过配对系统。
 §
@@ -22,8 +22,12 @@ adata库实际路径：/home/yu/.local/lib/python3.12/site-packages/adata（v2.9
 §
 台账(portfolio.yaml)可能与App实际持仓不一致。教训：用户App截图是最新的持仓 ground truth，不能迷信台账文件。今日发现588080实际5300股vs台账5000股，即使用户没特别说明，也要先对比台账和App数据再分析。核实后再行动。
 §
-候补池(等回调3-5%)：材料ETF=562590/159516；联接C=020357。光模块ETF=515050(CPO≈74%)/159583；006503(财通集成)。科技仓上限60%。
-§
-2026-06-15持仓策略更新：588080(科创50ETF)5300股@1.760，止损1.64，TP1=1.95/TP2=2.00，加仓1.73；512480(半导体ETF)4500股@2.255，止损2.00，TP1=2.35/TP2=2.50，加仓2.20；515980(AIETF)4800股@1.088，止损上移至1.05，TP1=1.25出半仓/TP2=1.35出半仓。仓位43.5%总资产56,507现金56.5%。策略：持有不动，等科创50到1730~1750评估减仓。当日三只+3.5~4.2%全线大涨。
+候补ETF(等回调3-5%)：材料ETF=562590/159516；光模块ETF=515050(CPO≈74%)。科技仓上限60%。
 §
 清仓股不再触发止损预警：已清仓的股票必须从 monitor_positions.yaml 移除，旧状态（.market_alert_state）也需清理；新策略以候选股逻辑（接回区间+五档比）监控，不走止损逻辑。老大原话："已经清仓的股票，不应该再触发止损预警，我们已经制定新的策略，应该根据最新的策略触发。"
+§
+预警(2026-06-18)：止损/止盈/建仓信号 → 飞书APIv1推送；盘中cron → deliver:local；午休暂停。飞书推送已修复（API v1 OAuth，非webhook签名）。
+持仓(2026-06-18 13:57)：588080=1.947(TP1触)/512480=2.471(TP1已触发)/515980=1.229。持仓健康。
+台账≠App截图，App=ground truth。
+今年-1301元跑输上证，建议减少个股专注ETF。
+盘中盯盘格式：四列（昨收→今开→现价→五档比），不写长篇分析，主动推送。
