@@ -1,33 +1,37 @@
-老大沟通风格：先理清逻辑再行动，不要闷头搞太久。遇到问题→先汇报分析+Grok建议→老大决策。不要自己试超过3个方案还无果才报。
+沟通：先理逻辑→汇报分析+Grok建议→老大决策。不试超3方案。
 §
-老大交易体系：短线为主，已有skill：lingzhua-short-term-trading、stock-market-pro、quantitative-research、adata-stock-data
+交易：短线为主。skill:lingzhua-short-term-trading/stock-market-pro/quantitative-research/adata-stock-data
 §
-MiniMax到期日2026-07-16，**到期前一天（07-15）切换至DeepSeek V4 Flash**。DeepSeek base_url用OpenAI格式https://api.deepseek.com/v1，API key sk-前缀。
+模型：DeepSeek V4 Flash直连，provider=deepseek（base_url=https://api.deepseek.com/v1，sk-前缀key）。minimax-cn已到期停用
 §
-老婆QQ邮箱：243966637@qq.com，发送旅游方案附件时用。QQ邮箱SMTP正常（授权码已存.env）。你老婆邮箱收到江西行程邮件后自动回复了一个iLink Bot配对码（G32MYWVZ），说明她邮箱也被绑定过配对系统。
+老婆QQ:243966637@qq.com，SMTP已配.env。曾收iLink配对码G32MYWVZ
 §
-老三(NAS)：192.168.31.10 = FNOS，openclaw-gateway在其上运行。SSH用户名**YDL（大写）**，私钥~/.ssh/id_ed25519_new。教训：一直用小写ydl被PAM拒绝，密码和公钥双拒，排查3小时才发现。
+NAS:192.168.31.10(FNOS)，openclaw-gateway在上运行。skill:tvbox-config
 §
-主路由：192.168.31.1，用户root，密码123456（OpenWRT软路由）。SSH需要交互密码，用sshpass：sshpass -p '123456' ssh root@192.168.31.1 "命令"。J4125 CPU，正常48-49°C。
+路由:192.168.31.1 root/123456，OpenWRT J4125@48-49°C。sshpass交互。
 §
-识图：auxiliary.vision已配SenseNova(sensenova-6.7-flash-lite)，vision_analyze走这个。若报token超限(>10240)，先用ffmpeg压缩：ffmpeg -i input.jpg -vf "scale=1024:1024:force_original_aspect_ratio=decrease" -update 1 input_small.jpg
+识图：SenseNova(sensenova-6.7-flash-lite)，超10240token用ffmpeg缩至1024
 §
-老大交易风格：盘中实时盯盘，需要我主动推送分析（不等他问）。今日14:40推送尾盘分析已成惯例。对时间敏感，说"太晚了"就把分析提前跑。
+盯盘：主动推送不等问。尾盘14:40已成惯例，嫌晚提前。
 §
-TV-box融合配置（NAS）：http://192.168.31.10:19999/merged_32in1.json，systemd用户服务持久。文件/home/YDL/tvbox-repo/，pg.jar同目录。管理：systemctl --user restart tvbox-http。Skill已建：tvbox-config。
+TV-box: http://NAS:19999/merged_32in1.json，/home/YDL/tvbox-repo/。skill:tvbox-config
 §
-nikki：profiles目录`/etc/nikki/profiles/`。yq启动时删`.dns.proxy-server-nameserver`等字段，`fake-ip-filter-mode: rule`可保留。踩坑：`respect-rules: true`+yq删空`proxy-server-nameserver`→mihomo报错无法启动，必须`false`。`Seven1_fallback_Rule-Set_Enhanced.yaml`在跑（原版备用）。
+nikki:/etc/nikki/profiles/，yq删dns.proxy-server-nameserver，respect-rules需false
 §
-adata库实际路径：/home/yu/.local/lib/python3.12/site-packages/adata（v2.9.5），skill目录不存在。直接python3.12调用，腾讯接口qt.gtimg.cn是五档实时主力源，新浪备用。
+adata:v2.9.5@pip，腾讯qt.gtimg.cn五档主力源，新浪备用
 §
-台账(portfolio.yaml)可能与App实际持仓不一致。教训：用户App截图是最新的持仓 ground truth，不能迷信台账文件。今日发现588080实际5300股vs台账5000股，即使用户没特别说明，也要先对比台账和App数据再分析。核实后再行动。
+台账≠持仓真相，App截图=ground truth，先核实再分析
 §
-候补ETF(等回调3-5%)：材料ETF=562590/159516；光模块ETF=515050(CPO≈74%)。科技仓上限60%。
+候补ETF:材料562590/159516，光模块515050(CPO≈74%)。科技仓≤60%
 §
-清仓股不再触发止损预警：已清仓的股票必须从 monitor_positions.yaml 移除，旧状态（.market_alert_state）也需清理；新策略以候选股逻辑（接回区间+五档比）监控，不走止损逻辑。老大原话："已经清仓的股票，不应该再触发止损预警，我们已经制定新的策略，应该根据最新的策略触发。"
+清仓股不触止损预警，清monitor_positions.yaml+.market_alert_state。改候选股逻辑监控
 §
-预警(2026-06-18)：止损/止盈/建仓信号 → 飞书APIv1推送；盘中cron → deliver:local；午休暂停。飞书推送已修复（API v1 OAuth，非webhook签名）。
-持仓(2026-06-18 13:57)：588080=1.947(TP1触)/512480=2.471(TP1已触发)/515980=1.229。持仓健康。
-台账≠App截图，App=ground truth。
-今年-1301元跑输上证，建议减少个股专注ETF。
-盘中盯盘格式：四列（昨收→今开→现价→五档比），不写长篇分析，主动推送。
+持仓(6/22):588080@1.939 / 512480@2.481 / 515980(部分卖出余仓)/ 长江电力@26.76(买入200) / 鼎胜新材@26.20(买入200)。App=ground truth
+§
+ETF减仓：等位置>85%再减，不低位恐慌出。详见skill:trading-lessons
+§
+投资最重要的事知识库：skill:the-most-important-thing。含核心框架(四大秘密+20法则)、实战应用(6大A股场景)、原文出处
+§
+候选股新增 300444 双杰电气（配电设备+充电桩），2026-06-22放量+8.73%突破MA20。接回区间13.80~14.00，止损13.40，目标14.80/15.50。signal=breakout。
+§
+持仓(6/23更新)：ETF大部减仓（科创50剩~100股/半导体剩~100股/人工智能剩~200股）。新仓：长江电力200@26.76/鼎胜新材200@26.20。仓位~10%，现金~5万等回调接回。三大ETF分批接回方案已定：科创50 Batch1=1.85~1.90/Batch2=1.78~1.82/Batch3=1.65~1.72；半导体 Batch1=2.38~2.42/Batch2=2.20~2.25/Batch3=1.98~2.05；人工智能 Batch1=1.18~1.20/Batch2=1.13~1.16/Batch3=1.05~1.08。候选股新增300444双杰电气。
