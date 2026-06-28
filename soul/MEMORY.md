@@ -36,8 +36,6 @@ ETF减仓：等位置>85%再减，不低位恐慌出。详见skill:trading-lesso
 §
 用户期望：当我SSH/连接失败时，先自查skill/memory中的正确账号和凭据再重试，不要直接报告连不上。老大会说"账号对吗"来纠正。
 §
-劲拓股份(300400)策略(2026-06-25)：signal_type改为reversal，等放量站回MA10(41.64)确认回调结束再介入。止损40.00。现价41.06暂不建仓。分析记录已存~/.hermes/reports/a-share-research/劲拓股份_分析记录_20260625.md
-§
 大盘历史数据来源：NAS /home/YDL/.openclaw/workspace/a_stock_plan/fund_flow/市场数据汇总.md，含北向资金/涨跌家数/天时评分。收盘采集任务(15:35交易日)自动追加到此文件
 §
 人工智能ETF(515980)买点(2026-06-26老大确认)：等回调到MA10(1.18)附近再介入，不追1.22的过早信号。技术逻辑：6/25缩量新高(0.9x均量)表明上涨动能衰竭，等放量企稳再动手更安全。
@@ -50,4 +48,4 @@ ETF减仓：等位置>85%再减，不低位恐慌出。详见skill:trading-lesso
 §
 灵爪修复:update到2026.6.10+关Telegram+切模型deepseek/deepseek-chat(dreamfield/glm-5.2挂了503)。
 §
-安卓盒子HK1 RBOX X4(Android11)。NAS应用APK放/vol1/1000/下载/程序/，HTTP:NAS:19999。
+安卓盒子HK1 RBOX X4(Android11,ADB:5555,IP .129)。FongMi影视已装，影视仓64位电视版兼容最佳。NAS应用APK放/vol1/1000/下载/程序/。Nikki代理拦截raw.githubusercontent.com→用github.com/.../raw/refs/heads/main/下载。
