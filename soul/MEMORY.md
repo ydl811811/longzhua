@@ -8,7 +8,7 @@
 §
 NAS:192.168.31.10(FNOS)，openclaw-gateway在上运行。skill:tvbox-config
 §
-路由:192.168.31.1 root/123456，OpenWRT J4125@48-49°C。sshpass交互。
+局域网：路由192.168.31.1 root/123456 | 本机141 sudo:Ydl32021976
 §
 识图：SenseNova(sensenova-6.7-flash-lite)，超10240token用ffmpeg缩至1024
 §
@@ -20,7 +20,7 @@ nikki:/etc/nikki/profiles/，yq删dns.proxy-server-nameserver，respect-rules需
 §
 adata:v2.9.5@pip，腾讯qt.gtimg.cn五档主力源，新浪备用
 §
-台账≠持仓真相，App截图=ground truth，先核实再分析
+持仓台账权威文件=~/.hermes/stock-portfolio/monitor_positions.yaml，含全部成本/买卖记录。查持仓先读此文件。App截图=ground truth，核实后为准。
 §
 清仓股不触止损预警，清monitor_positions.yaml+.market_alert_state。改候选股逻辑监控
 §
@@ -30,7 +30,7 @@ ETF减仓：等位置>85%再减，不低位恐慌出。详见skill:trading-lesso
 §
 长江电力持仓补仓策略(2026-06-25)：200股@26.76，止损25.50，TP1=28.00/TP2=29.00。Batch1补仓@26.0~26.2(200股，60日低点支撑)，Batch2@25.5~26.0(200股，1月前低支撑)。监控脚本market_alert.py已加入add_position_1_target/add_position_2_target触发逻辑，价格≤目标时飞书推送📥信号。
 §
-持仓(7/1)：长江电力200/海正药业600/金融科技ETF800/通信ETF3000/消费电子ETF3000/TCL科技(000100)800股@6.16止损5.40TP6.50。候选新增：游戏ETF159869(触发1.07)。ETF触发价7/1上调：科创50→2.12/半导体→2.80/AI→1.24/设备→1.80/创新药→0.79。
+持仓(7/2)：长江电力200@26.76/海正药业600/游戏动漫ETF(159869)5000@1.099/科创50ETF(588080)2500@2.146/TCL科技(000100)800@6.16/鼎胜新材(603876)200@25.70。通信ETF(515880)卖1.625、消费电子ETF(159732)买1.88卖1.786、金融科技ETF(159299)8000份卖0.710赚161元已于7/2清仓。
 §
 候选股预警要求(2026-06-25确认)：即使候选股触发过建仓信号(price≤entry_max+五档比达标)，也不停止监控，持续显示是否仍在建仓区。飞书推送只发首次，但每日监控简报必须持续可见。不允许出现"监控已停止"。
 §
@@ -38,10 +38,12 @@ ETF减仓：等位置>85%再减，不低位恐慌出。详见skill:trading-lesso
 §
 大盘历史数据来源：NAS /home/YDL/.openclaw/workspace/a_stock_plan/fund_flow/市场数据汇总.md，含北向资金/涨跌家数/天时评分。收盘采集任务(15:35交易日)自动追加到此文件
 §
-预警推送不走飞书DM会话，只走群聊webhook机器人。在会话中不要推送任何预警/监控通知。
+预警推送只走群聊webhook机器人，不走飞书DM。
 §
 交易策略灵活运用：回调股用左侧(pullback)等支撑位买入，强势突破股用右侧(reversal)追趋势确认。不局限于单一策略，按股票走势特征决定。159516半导体设备ETF已改为右侧追涨策略。
 §
 电视(荣耀LOK-360):有线.177→无线.178 200M。4K卡芯片解码非网速。
 §
-灵爪修复:update到2026.6.10+关Telegram+切模型deepseek/deepseek-chat(dreamfield/glm-5.2挂了503)。
+多氟多接回区间50~52（卖出价附近），等企稳
+§
+金融科技ETF(159299)日K特征：每次反弹到30日线(0.737附近)就被打回，30线是强压力位。老大已确认此形态。
