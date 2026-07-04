@@ -1,14 +1,8 @@
-沟通：先理逻辑→汇报分析+Grok建议→老大决策。不试超3方案。
-§
-交易：短线为主。skill:lingzhua-short-term-trading/stock-market-pro/quantitative-research/adata-stock-data
-§
 模型：DeepSeek V4 Flash直连，provider=deepseek（base_url=https://api.deepseek.com/v1，sk-前缀key）。minimax-cn已到期停用
 §
 老婆QQ:243966637@qq.com，SMTP已配.env。曾收iLink配对码G32MYWVZ
 §
 NAS:192.168.31.10(FNOS)，openclaw-gateway在上运行。skill:tvbox-config
-§
-局域网：路由192.168.31.1 root/123456 | 本机141 sudo:Ydl32021976
 §
 识图：SenseNova(sensenova-6.7-flash-lite)，超10240token用ffmpeg缩至1024
 §
@@ -24,9 +18,7 @@ adata:v2.9.5@pip，腾讯qt.gtimg.cn五档主力源，新浪备用
 §
 ETF减仓：等位置>85%再减，不低位恐慌出。详见skill:trading-lessons
 §
-投资最重要的事知识库：skill:the-most-important-thing。含核心框架(四大秘密+20法则)、实战应用(6大A股场景)、原文出处
-§
-长江电力持仓补仓策略(2026-06-25)：200股@26.76，止损25.50，TP1=28.00/TP2=29.00。Batch1补仓@26.0~26.2(200股，60日低点支撑)，Batch2@25.5~26.0(200股，1月前低支撑)。监控脚本market_alert.py已加入add_position_1_target/add_position_2_target触发逻辑，价格≤目标时飞书推送📥信号。
+投资最重要的事：skill:the-most-important-thing
 §
 持仓(7/3)：长江电力200/海正药业600/科创50ETF2500@2.146/游戏ETF5000@1.099/TCL科技800@6.16/鼎胜新材200@25.70。清仓：通信ETF/消费电子ETF/金融科技ETF(均7/2止损止盈)。159516接回计划：Batch1 1.65~1.72(1500份)+Batch2 1.53~1.58(1500份)。588080(科创50)≈75%半导体，与159516(设备材料)互补，不与512480重叠。
 §
@@ -45,3 +37,9 @@ ETF减仓：等位置>85%再减，不低位恐慌出。详见skill:trading-lesso
 灵爪通信方式：通过NAS sharebox文件交换。用SSH写文件到 lingzhua-box/ 目录即可向灵爪发消息，灵爪回复在 longzhua-box/ 目录。具体凭据见 hermes-devops skill。
 §
 YAML坑：带前导0的股票代码必须加引号('002407','000100')否则被解析为八进制。用户要求不改止损价，盘中预警触发但未实际卖出时不自动改状态，需用户确认。多氟多新接回44~48。159206卫星ETF新建仓监控(回调1.764~1.766/突破>1.772)。
+§
+DAED v1.27.0 已手动从 GitHub release 安装（2026-07-04）。opkg源只有v1.24.0。J4125/内核6.6.110实测可用。Nikki已停用
+§
+Nikki管理：api_secret=054826(uci show nikki.mixin.api_secret)，状态= /etc/init.d/nikki status，端口验证=netstat -tlnp | grep -E '7891|7892|1053|9090'。切换DAED→Nikki：先/etc/init.d/daed disable+stop，再nikki enable+start
+§
+DAED 面板 admin 密码: admin123（OpenWRT 192.168.31.1:2023）。GraphQL 端点是 /graphql（非 /api/graphql），可从远程主机直接访问 http://192.168.31.1:2023/graphql。
