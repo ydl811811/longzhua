@@ -51,3 +51,13 @@ A股个股投研：→ skill:a-share-research
 - 盯盘：主动推送不等问。尾盘14:40已成惯例
 - 决策后分析记录保存到 `~/.hermes/reports/`，方便复盘
 - 写记忆优先压缩：新信息提炼为1-2行结构化条目，不做原文粘贴或过程日志
+§
+- 日志: journalctl -u sing-box。skill: networking/sing-box-gateway
+- 优化已固化: MTU=1500(非9000,防分片超时)、route.final=漏网之鱼、QUIC reject
+- 订阅仅5源: 机场/US-VPS/中转美国/日本JTTI/AWS-LIGHT(sub-store@NAS:3001)，178→41优质节点(清光Cloudflare免费垃圾)。生成脚本/tmp/gen_singbox_5subs.py
+- 走旁路设备(ip rule from IP lookup 2022 pri 100): .102/.156/.10(NAS,静态IP需手动改网关)/.81。路由器ImmortalWRT密码123456，DHCP给NAS/.81加sidegw tag下发网关+DNS=141
+- 机场"顺畅"官网scwljsq.scl168.club被墙但订阅djcrqwadn.shunsll.net(走CF CDN)可用;NAS未走旁路时拉境外订阅会500
+§
+Hermes自定义provider默认自动调用/v1/models覆盖models:列表。如需手动列表加discover_models: false。
+§
+sing-box 旁路网关: /etc/sing-box/config.json (root属主), /etc/systemd/system/sing-box.service.d/override.conf (环境变量)。生成脚本: /tmp/gen_singbox_5subs.py（5订阅源精简版）。Clash API: :9090, secret=054826。面板访问: http://192.168.31.141:9090/ui （不要用HTTPS的metacubexd.pages.dev，有混合内容拦截）。
