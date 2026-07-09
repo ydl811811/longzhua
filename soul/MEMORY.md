@@ -52,12 +52,14 @@ A股个股投研：→ skill:a-share-research
 - 决策后分析记录保存到 `~/.hermes/reports/`，方便复盘
 - 写记忆优先压缩：新信息提炼为1-2行结构化条目，不做原文粘贴或过程日志
 §
-- 日志: journalctl -u sing-box。skill: networking/sing-box-gateway
-- 优化已固化: MTU=1500(非9000,防分片超时)、route.final=漏网之鱼、QUIC reject
-- 订阅仅5源: 机场/US-VPS/中转美国/日本JTTI/AWS-LIGHT(sub-store@NAS:3001)，178→41优质节点(清光Cloudflare免费垃圾)。生成脚本/tmp/gen_singbox_5subs.py
-- 走旁路设备(ip rule from IP lookup 2022 pri 100): .102/.156/.10(NAS,静态IP需手动改网关)/.81。路由器ImmortalWRT密码123456，DHCP给NAS/.81加sidegw tag下发网关+DNS=141
-- 机场"顺畅"官网scwljsq.scl168.club被墙但订阅djcrqwadn.shunsll.net(走CF CDN)可用;NAS未走旁路时拉境外订阅会500
+sing-box旁路网关 192.168.31.141：sing-box 1.13.14，TUN+FakeIP，Clash API:9090/密码054826，面板http://192.168.31.141:9090/ui。DNS已优化（删除运营商DNS，只保留ali-dns/google-dns DoH+fakeip）。nftables dns_block链已生效：放行127.0.0.0/8和sing-box-tun的DNS，封锁其他明文DNS。旁路设备.102/.156/.10/.81。→ skill:sing-box-gateway
 §
 Hermes自定义provider默认自动调用/v1/models覆盖models:列表。如需手动列表加discover_models: false。
 §
-sing-box 旁路网关: /etc/sing-box/config.json (root属主), /etc/systemd/system/sing-box.service.d/override.conf (环境变量)。生成脚本: /tmp/gen_singbox_5subs.py（5订阅源精简版）。Clash API: :9090, secret=054826。面板访问: http://192.168.31.141:9090/ui （不要用HTTPS的metacubexd.pages.dev，有混合内容拦截）。
+清仓后清理：①position状态用status: sold（不是cleared，脚本只认sold）②删除state文件~/.hermes/scripts/.market_alert_state中对应代码行
+§
+观察票(signal_type:watch)不移除，每日15:10 cron扫触底信号。513120港股创新药ETF波段：entry 1.10-1.13/1.05-1.07,SL1.05,TP1.19/1.23。
+§
+主路由192.168.31.1(ImmortalWrt)：Nikki代理已关闭。曾针对.102手机DNAT重定向(→141:7891)已清理。
+§
+用户计划购买雷鸟鹤6 26款75寸电视（型号75R69A）替换故障的荣耀X1 65寸。目标价格：京东自营叠满券+国补后约3276-3438元，拼多多百亿补贴约3241元。推荐京东自营（售后+送装一体）。配置：312分区Mini LED、1300nits、150Hz、华星HVA屏、无开机广告、灵控系统3.0（安卓底层，可装APK）
