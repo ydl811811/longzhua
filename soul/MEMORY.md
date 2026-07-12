@@ -68,4 +68,4 @@ Sub-Store订阅源（旁路网关自动更新用）：机场/日本VPS/新加坡
 §
 NAS路径/fs/1000/ftp/：FNOS文件系统实际存储路径，非/home/YDL/。通过SSH用YDL用户密码YDL32021976w登录。
 §
-旁路网关 daed 迁移：daed v1.27.0 已安装，服务运行正常。Web面板 http://192.168.31.141:2023 (admin/admin123)。订阅导入待继续排查（importSubscription 节点为0问题，见 skill:daed-config references/ubuntu-subscription-import-issue.md）。sudo密码：Ydl32021976。
+旁路网关 daed 迁移：daed v1.27.0 已安装，灵爪已于7月12日完成配置（订阅导入+DNS分流等问题均已解决）。Web面板 http://192.168.31.141:2023 (admin/admin123)。sing-box已替换。sudo密码：Ydl32021976。
