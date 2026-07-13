@@ -48,3 +48,7 @@ DeepSeek V4 Flash 是主力，MiniMax 已到期停用。
 用户有贝卡尔特内部PPT模板，后续做PPT需参考历史模板风格
 §
 旁路网关(192.168.31.141)当前运行sing-box，daed已停用
+§
+User's main AI companion model is called "灵爪" (astron-code-latest via MaaS API - 讯飞). User frequently interacts with 灵爪 for conversation. When 灵爪 is unresponsive, it's a recurring problem.
+§
+User's AI companion "灵爪" = OpenClaw running on NAS (192.168.31.10), NOT astron-code-latest (讯飞MaaS). Critical distinction: when user says "灵爪不回复" the problem is the NAS OpenClaw gateway (port 18789), NOT the讯飞MaaS API.灵爪 communicates via Feishu bot (appId: cli_a93559e471b8dbd2). OpenClaw gateway restarts with kill+restart sequence via SSH. The remote config (ws://192.168.31.141:18789) is for cross-gateway management and does NOT affect Feishu messaging (Feishu connects directly to灵爪's gateway via WebSocket).

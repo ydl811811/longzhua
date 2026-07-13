@@ -1,12 +1,6 @@
-## 🔧 环境配置
-
-模型：DeepSeek V4 Flash 直连，provider=deepseek（base_url=https://api.deepseek.com/v1，sk-前缀key）。minimax-cn 已到期停用。
-识图：SenseNova（sensenova-6.7-flash-lite），超10240token用ffmpeg缩至1024。
-adata：v2.9.5@pip。腾讯 qt.gtimg.cn 五档主力源，新浪备用。
+模型：DeepSeek V4 Flash 直连，provider=deepseek（base_url=https://api.deepseek.com/v1，sk-前缀key）。minimax-cn 已到期停用。memory provider已从hindsight改为local（免费）。
 §
-NAS：192.168.31.10（FNOS），openclaw-gateway 在上运行。
-Router：ImmortalWRT 192.168.31.1（Nikki/mihomo）。fake-ip+proxy-server-nameserver，需备份再改。backup_lingzhua_to_github.py DNS patch已删（GitHub走代理可达）。
-Nikki：/etc/nikki/profiles/，yq 删 dns.proxy-server-nameserver，respect-rules 需 false。
+Router：ImmortalWRT 192.168.31.1（Nikki/mihomo），SSH root密码123456，LuCI web密码123456
 §
 TV-box：http://NAS:19999/merged_32in1.json，/home/YDL/tvbox-repo/。→ skill:tvbox-config
 灵爪：通过 NAS sharebox 文件交换。SSH 写 lingzhua-box/ 目录发消息，回复在 longzhua-box/。→ skill:hermes-devops
@@ -69,3 +63,9 @@ Sub-Store订阅源（旁路网关自动更新用）：机场/日本VPS/新加坡
 NAS路径/fs/1000/ftp/：FNOS文件系统实际存储路径，非/home/YDL/。通过SSH用YDL用户密码YDL32021976w登录。
 §
 旁路网关 daed 迁移：daed v1.27.0 已安装，灵爪已于7月12日完成配置（订阅导入+DNS分流等问题均已解决）。Web面板 http://192.168.31.141:2023 (admin/admin123)。sing-box已替换。sudo密码：Ydl32021976。
+§
+旁路网关sing-box API端口9090，需认证访问。面板地址待确认。
+§
+旁路网关USB网卡AX88179千兆网卡协商在百兆模式（100Mb/s），可能是网线或主路由端口问题，待排查
+§
+灵爪(NAS上的OpenClaw) ≠ astron-code-latest(讯飞MaaS) — 前者是NAS上的AI Agent(192.168.31.10, OpenClaw, 端口18789)，走飞书聊天；后者是旁路网关配置的MaaS API模型。用户说"灵爪不回复"时要SSH到NAS查OpenClaw进程，不是测讯飞MaaS。
