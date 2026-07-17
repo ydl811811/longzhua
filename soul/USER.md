@@ -30,3 +30,7 @@ User's AI companion "灵爪" = OpenClaw running on NAS (192.168.31.10), NOT astr
 身份：散户，贝卡尔特员工，主账户 ~58,125元，6 持仓 + 6 候选。YAML (monitor_positions/watched.yaml) 是 cron 单一事实源，**新增/清仓后用户需主动告知，我手动同步**。
 §
 用户偏好：尽量精简回复，字数一多他会懒得看。给他内容先结论后细节、不要段落铺陈、bullet 优先于 prose。技术细节按需补充。
+§
+用户偏好：所有任务（股票及非股票）处理前先查 ~/.hermes/ 下相关历史归档（decision_log.yaml / project files / cron output 等），再回答；新决策/重要事件立刻归档到对应门类文件。记忆只存索引/分类（如「股票类入口」「网络类入口」），不写具体内容。
+§
+对话偏好：精简优先（默认不超过一屏）；不抛"选 A/B/C/D"决定权，除非风险大；日期/星期必须 date 验证不许凭模型记忆。

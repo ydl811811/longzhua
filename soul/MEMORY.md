@@ -13,8 +13,6 @@ Firecrawl：web/web_extract 后端。API Key 有效，systemd drop-in 加载。w
 §
 清仓后清理：①position状态用status: sold（不是cleared，脚本只认sold）②删除state文件~/.hermes/scripts/.market_alert_state中对应代码行
 §
-观察票(signal_type:watch)不移除，每日15:10 cron扫触底信号。513120港股创新药ETF波段：entry 1.10-1.13/1.05-1.07,SL1.05,TP1.19/1.23。
-§
 老大说**"开搞"**就是直接干不要请示，干完汇报结果。每步都问会烦。
 §
 灵爪(NAS上的OpenClaw) ≠ astron-code-latest(讯飞MaaS) — 前者是NAS上的AI Agent(192.168.31.10, OpenClaw, 端口18789)，走飞书聊天；后者是旁路网关配置的MaaS API模型。用户说"灵爪不回复"时要SSH到NAS查OpenClaw进程，不是测讯飞MaaS。
@@ -31,10 +29,16 @@ config.yaml 是安全敏感文件：patch/write_file 工具会拒绝写（错误
 
 记忆里的"已停用/已迁移/已过期"条目不可信 —— 用户续订/重新启用时记忆会滞后。每次相关话题先用 hermes config show 实测确认，不要凭记忆下结论。
 §
-对话边界（2026-07-16 老大明确）：中文精简低字数，长回复"我有点不想看"。**不展示内部推理**——模型推理用上即可，不要把推理过程写到回复里。决策：用户要专业分析+自主建议，但**重大动作（清仓/加主仓/换主线）等点头**；YAML 内置策略的小决策（网格触发/当日止损）可执行。
-
-YAML 是 cron 单一事实源：每次新建仓/清仓/账户间划转，用户需主动告知并截图，我手动同步到 monitor_positions/watched.yaml。**忘同步=报告失真**（2026-07-16 已踩：000783 长江证券 sold vs 实际重仓、159869 单账户 9000 vs 双账户 14000）。
-
-YouTube 字幕:徐小明视频**无字幕轨**（yt-dlp 实测 zh-Hans/zh-CN/en 都无），cron 只能依赖 web 文字源（新浪 tzxy.sina.com.cn）。Mihomo 不开本地代理：127.0.0.1:7890 死，只有路由层代理。
-
-主线 cron `ab35f2b2c37e`(2026-07-16 建):daily 19:00 工作日。首次确认医药生物(创新药+中药)= 主线、513120 持仓核心。
+Skill索引：YouTube字幕抓取 BCP-47 语言代码（zh-Hans 不能用 zh）+ Nikki代理配置 + 抓不到fallback — 详见 ~/.hermes/skills/productivity/hermes-cron-management/references/youtube-transcript-cron-integration.md
+§
+股票铁律 P0（用户 7/16-17 反复确认）：
+1. 用户问股 → 先 curl qt.gtimg.cn 拉实时数据 → 结合 monitor_positions/watched/decision_log 策略 → 给意见。绝不靠记忆给股价。
+2. 24h 内决策不掉头，除非新事实（业绩雷/政策反转）。
+3. 用户频繁反悔时（24h 内 2+ 次），默认倾向"维持上一次决策"而不是顺着新情绪。
+4. 重大决策（清仓/换主线/加仓 ≥ 2000 元）等用户点头；小决策（网格/止损）按 YAML 自动执行。
+5. memory 只放索引不放具体股票代码/价格/数量；具体事项归档到 stock-portfolio/ yaml + reports/。
+6. 同样的索引归档原则适用于所有非股票事务。
+§
+监控架构(2026-07-17):统一脚本 ~/.hermes/scripts/stock_monitor.py + cron 1c6cd4c32caf (no_agent=True, */5 9-14 工作日)。含 A 股时段过滤+单标单维每日一次防重。清仓必同步清 cron；监控 cron 必 no_agent=True。
+§
+用户本金 60,000（7/17 用户明确告知）。助理 7/17 15:00 曾误算"现金 21,900 当盈利"，被用户纠正。**任何资产计算都必须：总资产 = 持仓市值 + 现金，盈亏 = 总资产 - 本金**。已写入 monitor_positions.yaml 末尾"全账户总览"段。
