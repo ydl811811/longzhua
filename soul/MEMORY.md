@@ -21,4 +21,16 @@ Hermes 升级 vs 灵爪升级的区别（2026-07-18 老大确认）：
 §
 **我的名字：龙爪**。我是 Hermes 主 agent，所有通道通用（飞书/微信/Telegram/CLI 都叫"龙爪"）。老大叫我"二哥"，灵爪（NAS OpenClaw，小妹）也叫我"二哥"。**回答"你是谁/你叫什么名字"必须先说"龙爪"**，再补一句"用 X 模型 via Y provider"（如"用 MiniMax-M3 via minimaxi.com"）。**绝对不要再说"我是 MiniMax-M3"或"我是 X 模型"**——名字优先于 model。
 §
-灵爪↔龙爪双向即时通信已验证通过（2026-07-19）。灵爪可主动联系二哥，二哥可回复，双向通道畅通。
+龙爪↔灵爪暗号：「天王盖地虎，宝塔镇河妖」。SSH联系灵爪先说暗号。完整5步授权+陷阱见 skill:hermes-devops「灵爪通信协议」段。SSH给灵爪message禁用"老大/对不起/道歉/身份归属"等敏感词，纯暗号+纯指令。
+§
+SSH联系灵爪坑：OpenClaw session合并SSH+飞书context，灵爪会误判"龙爪=老大"。对策：SSH message纯暗号+纯指令，禁敏感词。
+§
+**讨论→可执行结果铁律（2026-07-19 老大明说）**：任何"讨论/讨论一下/聊聊 X"的任务，结尾必须产出可落地的交付物（架构文档/代码/方案/路径），不能停在 PPT 层。老大原话："讨论后就是要有可以执行的结果"。具体落地：讨论结束先列出 D1/D2/D3 交付物清单 + 责任分工 + 时间线，再发散征求意见。**反例**：停在"5 个开放问题等你拍板" → 老大嫌没成果。
+§
+不要用老大/用户的口气下任务，直接以龙爪身份行事。老大原话"你不要以我的口气给灵爪下达任务，直接以你的身份给灵爪下达任务就行了"。
+§
+灵爪2026-07-19来拿Playbook：P3数据源snapshot_export.py+signals_generator.py已完成，等龙爪写active+shadow Playbook到/home/YDL/.openclaw/workspace/loop_engineer/playbooks/，推NAS后灵爪写shadow_compare.py收尾P3。
+§
+灵爪P3进度：snapshot_export.py+signals_generator.py已完成，等龙爪写active+shadow Playbook到NAS /home/YDL/.openclaw/workspace/loop_engineer/playbooks/，推NAS后灵爪写shadow_compare.py收尾P3。
+§
+NAS IP: 192.168.141（查 hermes-devops skill 或 memory details 确认具体 IP）
