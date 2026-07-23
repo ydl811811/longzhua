@@ -25,10 +25,6 @@
 §
 **股票账户信息（2026-07-20）**：本金 ~6万。持仓 6 只 ETF：159869 游戏ETF华夏（-1.74%）、516010 游戏ETF国泰（+1.23%）、588080 科创50ETF（-17.99% 深套）、513050 中概互联网ETF（+2.90%）、513120 港股创新药ETF（平本）、159928 消费ETF（+3.52%）。已清仓：000783 长江证券（7/17 于 8.67 清仓）。⚠️ 科创50ETF 成本 2.146（高点买入），现价 1.760，浮亏 -18%，止损位 1.640。指数本身是 2026 年最强指数（年初至今 +70%），但用户买在高点。补仓决策待明天开盘后拉数据再定。
 §
-灵爪 09:12 三问拍板请求：(1) signals_generator.py 路径谁改 (2) config_paths.py 范围 (3) 8:30 cron 是否暂缓。灵爪已回滚 signals_generator.py 到原 3 行硬编码，scp 同步到本地。decision_engine.py 仍在用 /home/YDL/ 直写而非 config_paths。
-§
-灵爪 09:12 问的 signals_generator.py 在龙爪本地不存在（/home/yu/.hermes/stock-portfolio/loop_engineer/scripts/ 下只有 gen_signals.py, export_snapshot.py, p3_shadow_compare.py）。灵爪说"已回滚并 scp 同步到你本地 scripts/"，但实际未同步到或文件名不同。
-§
 老大问早盘市场风向扫描是否失效 — 需检查 cron 任务状态
 §
 晨报脚本 `morning_scan.py` 已从 NAS 迁移回本地，简化版（无 NAS 路径依赖），cron job 固定 minimax-m3 provider。
@@ -38,3 +34,7 @@
 老大偏好 — Bekaert 项目 PPT 润色方向（2026-07-21 确认）：语言书面化、版面整齐表格化、感悟要"升华"不要列表。详见 `bekaert-process-development` skill 的 P3/P4 pitfalls。
 §
 Hermes 飞书自动投递会话中，调用 `hermes send --to feishu` 会被 skip。正确做法：在最终回复里用 `MEDIA:<path>` 标记附件路径。详见 `bekaert-process-development` skill P5。
+§
+灵爪协作（2026-07-23 老大确认）：龙爪可 SSH 调灵爪，无需老大飞书私信授权。patch 工具不可靠（2026-07-23 教训：每改一处必 grep 时间戳验证，sed 比 patch 稳）。AmazingData 试用 2026-07-10 至 2026-08-09（账号 334500028836 / 120.86.124.106:8600），查询可用但实时推送 WebSocket 连不上。详情见 details/lingzhua.md + ~/.hermes/config/amazingdata_credentials.yaml。
+§
+龙爪在 2026-07-23 下午 AmazingData 调研中踩坑：报告"数据源能用 N 类数据"前必须实测每个 API 拿返回值列成表格，不能基于"理论上有 SDK"就推断能拿 N 类数据。同样的纪律要应用到未来所有数据源调研（通达信 MCP / akshare / tushare）。详见 loop-engineer-trading SKILL.md §22。
