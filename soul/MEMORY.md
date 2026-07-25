@@ -35,12 +35,8 @@ Hermes 飞书自动投递会话中，调用 `hermes send --to feishu` 会被 ski
 §
 龙爪在 2026-07-23 下午 AmazingData 调研中踩坑：报告"数据源能用 N 类数据"前必须实测每个 API 拿返回值列成表格，不能基于"理论上有 SDK"就推断能拿 N 类数据。同样的纪律要应用到未来所有数据源调研（通达信 MCP / akshare / tushare）。详见 loop-engineer-trading SKILL.md §22。
 §
-老大 2026-07-24 指出的接口错误 — **first-class 第五偏好: 数据源测试场景必须标接口名**。
-
-事件: 11:27 老大问"再看看实时价格", 我用腾讯 qt.gtimg.cn(老接口), 老大刚买的闲鱼 tushare 接口(新接口)。老大原话: "你这次是用哪个接口获取的数据？"
-
-硬规则: 用户提到"新买的接口"时, **必须先标接口名再报数据** ("【闲鱼 fastapic】拉到 X, 今天盘中=0 条")。
-
-扩展原 P0 铁律: "用户问股 → 先 curl qt.gtimg.cn 拉实时数据 → 绝不靠记忆给股价" 加上 "**必须标出接口名**"。
-
-配套: ~/.hermes/skills/data-science/xianyu-tushare/SKILL.md (硬限制: 非盘中接口, 仅盘后复盘用)。
+老大偏好: 数据源测试必须标接口名（2026-07-24）。用户提"新买的接口" → 先标名再报数据。配套: xianyu-tushare skill。
+§
+旁路由（192.168.31.50）已弃用 DAED，改用 Nikki（mihomo）。面板 http://192.168.31.50:9090/ui/zashboard/。141 本机（192.168.31.141）sing-box 已停用，流量走硬路由（192.168.31.1）→ 旁路由 Nikki。
+§
+141 本机（192.168.31.141）sing-box 已停用（2026-07-26），改走旁路由 Nikki 代理。Sing-box 有每日 00:00 自动更新订阅的 systemd timer（sing-box-subscription.service）。
