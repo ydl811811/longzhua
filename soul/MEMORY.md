@@ -23,7 +23,7 @@
 - 新增铁律/规则 → 先看命中哪类，直接 edit 对应 details 文件，**不动 MEMORY.md**
 - MEMORY.md 仅在"新增类别"时追加索引行
 §
-晨报脚本 `morning_scan.py` 已从 NAS 迁移回本地，简化版（无 NAS 路径依赖），cron job 固定 minimax-m3 provider。
+默认模型改为 minimax-m3（minimax-cn provider），2026-07-28 老大要求切换。当前 session 生效在下一次新建会话。
 §
 老大强调"不要凭直觉下结论"（2026-07-21 PPT 教训）：当老大说"我把15页发给你，你说没内容"时，是因为我之前看错了页码，把第20页误判为第15页空章节页。规则：分析截图/PPT/文档时，必须以"页面右下角页码数字"为准，不要凭图片内容相似度推断页码；遇到"Subtitle 占位符未填"等结论前，先核对页码是否正确。引用：~/.hermes/details/discipline.md "老大决策模式"段已记录"老大 2026-07-21 现场表达两个 first-class 偏好"，本条扩展第三项——重视准确性。
 §
