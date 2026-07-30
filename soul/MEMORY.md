@@ -39,4 +39,4 @@ Hermes 飞书自动投递会话中，调用 `hermes send --to feishu` 会被 ski
 §
 旁路由（192.168.31.50）已弃用 DAED，改用 Nikki（mihomo）。面板 http://192.168.31.50:9090/ui/zashboard/。141 本机（192.168.31.141）sing-box 已停用，流量走硬路由（192.168.31.1）→ 旁路由 Nikki。
 §
-141 本机（192.168.31.141）sing-box 已停用（2026-07-26），改走旁路由 Nikki 代理。Sing-box 有每日 00:00 自动更新订阅的 systemd timer（sing-box-subscription.service）。
+141 是给龙爪的宿主机，老大主笔记本是 156（Windows，Realtek 网卡）。股票分析：数据+趋势我给，**交易参数老大定**（a-share-research skill 已写）。

@@ -16,3 +16,5 @@
 贝卡尔特工艺工程师，讲中文。技术报告偏好书面化语言，版面对齐整齐、宽屏 16:9 风格（13.33×7.5 英寸）。项目结构强调 "项目边界清晰" — 同一份 PPT 涉及多个项目时，需要用分隔页 / 大标号明确区隔。PPT 报告模板：参考 `/home/yu/.hermes/output/bekaert_report/` 下的 .pptx 文件。
 §
 老大偏好：软路由代理首选 Nikki (mihomo) 或 OpenClash，不要用 DAED（DAED 节点导入 bug 多、面板看不到延迟、节点切换不方便、旁路需手动配 masquerade）。使用 Nikki 时不需要手动配 masquerade（OpenClash 的 include 机制自动处理）。
+§
+老大有两台电脑（2026-07-30 纠正）：① Windows 笔记本 192.168.31.156（Realtek RTL8852BE Wi-Fi，主用）；② K46CM Linux 笔记本 192.168.31.141（给我用的宿主机，老大不用）。**不要把 141 当老大的笔记本**——网管 skill 的环境知识已同步修正。
