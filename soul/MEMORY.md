@@ -1,27 +1,4 @@
-# MEMORY.md - agent 笔记索引
-
-**任务开头第一动作**：检查下面索引，命中类别 → 读 `details/<类别>.md`（不要凭直觉拼凭据/命令/路径）。
-
-**我是龙爪，主 agent**（名字优先于 model；具体展开见 details/discipline.md）。
-
-## 索引
-
-- 家庭网络/IP/旁路网关 → details/home-network.md
-- NAS（飞牛 FNOS）→ details/nas.md
-- 灵爪（OpenClaw，飞书 bot）→ details/lingzhua.md（含协作分工铁律）
-- 股票决策台账+铁律 → details/stock.md
-- 工作（贝卡尔特/钢丝绳）→ details/work.md
-- 联系方式/Hermes channels → details/channels.md
-- Hermes 工具栈/版本/已知坑 → details/hermes-stack.md
-- 操作纪律/沟通规则/身份铁律/协作分工索引 → details/discipline.md
-- 检索总表 → details/index.md
-
-## ⚠️ memory 双层架构铁律
-
-- **MEMORY.md** = 索引（本文档，≤ 1500 字符）
-- **details/<类别>.md** = 具体内容（无上限）
-- 新增铁律/规则 → 先看命中哪类，直接 edit 对应 details 文件，**不动 MEMORY.md**
-- MEMORY.md 仅在"新增类别"时追加索引行
+灵爪（OpenClaw，飞书 bot）→ details/lingzhua.md（含协作分工铁律）
 §
 默认模型改为 minimax-m3（minimax-cn provider），2026-07-28 老大要求切换。当前 session 生效在下一次新建会话。
 §
@@ -40,3 +17,5 @@ Hermes 飞书自动投递会话中，调用 `hermes send --to feishu` 会被 ski
 YouTube字幕抓取：脚本 /home/yu/.hermes/skills/media/youtube-content/scripts/fetch_transcript_with_proxy.py 自动切Nikki YouTube组到台湾住宅节点（台湾-故转）→ 抓字幕 → 抓完切回原节点。任何YouTube视频均可，换VIDEO_ID即可。
 §
 日本VPS 207.56.226.188 root/YDL32021976w，CentOS 7，内核5.15.60已跑BBR v1。BBR v3脚本（byJoey/Actions-bbr-v3）仅支持Debian/Ubuntu，CentOS 7不可用。已测试SSH连通，装了ELRepo源但无6.x内核。老大决定保持现状不升级。
+§
+灵爪 vs 龙爪 部署模式铁律（2026-08-01 老大定调）：**数据接口类 skill 必须龙爪 141 本机部署，灵爪 SSH 调用，不许灵爪自己装**。参考：4 月 adata 协作模式（archived/adata-stock-data + `~/.openclaw/workspace/claw-communication/sharebox/lingzhua-box/龙爪_灵爪使用adata库指南_20260427.md`）+ 本次 a-stock-data。违反后果：灵爪自己装 mootdx → 触发 httpx 冲突 → 重演 adata 接口不稳老路。**v1 错判教训**：建议"灵爪自己装"前必走 4 步（sharebox 历史 / lingzhua.md / MEMORY 索引 / 都没才考虑灵爪自装）。详见 details/lingzhua.md + china-stock-data-providers skill 的"部署模式铁律"段 + evaluate-before-commit-data-sources skill 的"v1 错判教训"段。
