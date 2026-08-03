@@ -1,10 +1,8 @@
-灵爪（OpenClaw，飞书 bot）→ details/lingzhua.md（含协作分工铁律）
+灵爪（OpenClaw，飞书 bot）+ 部署铁律（2026-08-01）：**数据接口类 skill 必须龙爪 141 本机部署，灵爪 SSH 调用，不许灵爪自己装**。违反：灵爪自装 mootdx → httpx 冲突 → adata 接口不稳老路。v1 错判教训：建议"灵爪自装"前必走 4 步（sharebox 历史 / lingzhua.md / MEMORY / 都没）。详见 details/lingzhua.md + china-stock-data-providers + evaluate-before-commit-data-sources。
 §
 默认模型改为 minimax-m3（minimax-cn provider），2026-07-28 老大要求切换。当前 session 生效在下一次新建会话。
 §
-老大偏好 — Bekaert 项目 PPT 润色方向（2026-07-21 确认）：语言书面化、版面整齐表格化、感悟要"升华"不要列表。详见 `bekaert-process-development` skill 的 P3/P4 pitfalls。
-§
-Hermes 飞书自动投递会话中，调用 `hermes send --to feishu` 会被 skip。正确做法：在最终回复里用 `MEDIA:<path>` 标记附件路径。详见 `bekaert-process-development` skill P5。
+Bekaert PPT 偏好（书面化语言、整齐表格化、感悟"升华"非列表）+ 飞书自动投递 `hermes send --to feishu` 被 skip（用 `MEDIA:<path>`）。详见 bekaert-process-development skill P3/P5。
 §
 旁路由（192.168.31.50）已弃用 DAED，改用 Nikki（mihomo）。面板 http://192.168.31.50:9090/ui/zashboard/。141 本机（192.168.31.141）sing-box 已停用，流量走硬路由（192.168.31.1）→ 旁路由 Nikki。
 §
@@ -18,4 +16,6 @@ YouTube字幕抓取：脚本 /home/yu/.hermes/skills/media/youtube-content/scrip
 §
 日本VPS 207.56.226.188 root/YDL32021976w，CentOS 7，内核5.15.60已跑BBR v1。BBR v3脚本（byJoey/Actions-bbr-v3）仅支持Debian/Ubuntu，CentOS 7不可用。已测试SSH连通，装了ELRepo源但无6.x内核。老大决定保持现状不升级。
 §
-灵爪 vs 龙爪 部署模式铁律（2026-08-01 老大定调）：**数据接口类 skill 必须龙爪 141 本机部署，灵爪 SSH 调用，不许灵爪自己装**。参考：4 月 adata 协作模式（archived/adata-stock-data + `~/.openclaw/workspace/claw-communication/sharebox/lingzhua-box/龙爪_灵爪使用adata库指南_20260427.md`）+ 本次 a-stock-data。违反后果：灵爪自己装 mootdx → 触发 httpx 冲突 → 重演 adata 接口不稳老路。**v1 错判教训**：建议"灵爪自己装"前必走 4 步（sharebox 历史 / lingzhua.md / MEMORY 索引 / 都没才考虑灵爪自装）。详见 details/lingzhua.md + china-stock-data-providers skill 的"部署模式铁律"段 + evaluate-before-commit-data-sources skill 的"v1 错判教训"段。
+老大分批发成交（2026-08-03）：报成交会拆多条消息分批（先 1500 @ 1.183，再 1600 @ 1.180），不能只看最后一条。每次给方案前先 grep 当天成交清单，避免重复建议。
+§
+龙爪 = 141 本机（hostname yu-K46CM / IP 192.168.31.141，2026-08-03 老大纠正）。a-stock-data 部署在 141 上 → 本地直接调 venv，**不许 SSH 连自己**。实战教训：今天 SSH 141 失败 3 次才反应过来。铁律：①"SSH 连 141"= 乌龙；② 老大问"在 X 上吗"时先 `hostname && ip addr show` 确认；③ 灵爪 SSH 调龙爪链路是否通 ≠ 龙爪能否用 a-stock-data（灵爪在飞书侧/龙爪在 141 本地）。
