@@ -14,8 +14,12 @@ Bekaert PPT 偏好（书面化语言、整齐表格化、感悟"升华"非列表
 §
 YouTube字幕抓取：脚本 /home/yu/.hermes/skills/media/youtube-content/scripts/fetch_transcript_with_proxy.py 自动切Nikki YouTube组到台湾住宅节点（台湾-故转）→ 抓字幕 → 抓完切回原节点。任何YouTube视频均可，换VIDEO_ID即可。
 §
-日本VPS 207.56.226.188 root/YDL32021976w，CentOS 7，内核5.15.60已跑BBR v1。BBR v3脚本（byJoey/Actions-bbr-v3）仅支持Debian/Ubuntu，CentOS 7不可用。已测试SSH连通，装了ELRepo源但无6.x内核。老大决定保持现状不升级。
-§
-老大分批发成交（2026-08-03）：报成交会拆多条消息分批（先 1500 @ 1.183，再 1600 @ 1.180），不能只看最后一条。每次给方案前先 grep 当天成交清单，避免重复建议。
-§
 龙爪 = 141 本机（hostname yu-K46CM / IP 192.168.31.141，2026-08-03 老大纠正）。a-stock-data 部署在 141 上 → 本地直接调 venv，**不许 SSH 连自己**。实战教训：今天 SSH 141 失败 3 次才反应过来。铁律：①"SSH 连 141"= 乌龙；② 老大问"在 X 上吗"时先 `hostname && ip addr show` 确认；③ 灵爪 SSH 调龙爪链路是否通 ≠ 龙爪能否用 a-stock-data（灵爪在飞书侧/龙爪在 141 本地）。
+§
+老大口语化表达映射（2026-08-05 沉淀，新会话必读）：
+- ❌ **"X 买不到了" ≠ 触发了成交**（8/5 513120 教训）：实际 = 触发价已被向上突破/触发条件不可达/条件单 expired。判定：① 现价 vs 触发价方向 ② 触发条件 ≤ 还是 ≥ ③ 条件单是否在监控列表。宁可多问"触发还是作废？"也别凭印象改台账
+- "高看一线"= TP 上调要我给数字
+- "进攻"/"加仓进攻"= 现有策略上下重注（不改策略）
+- "今天不动了"= 只锁该标的不延伸到其他
+- 修正不留空白：原错误决策保留（教训），追加新条带 `rollback=true`
+- 详见 a-share-position-decision §十一
