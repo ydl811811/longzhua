@@ -1,4 +1,6 @@
-灵爪（OpenClaw，飞书 bot）+ 部署铁律（2026-08-01）：**数据接口类 skill 必须龙爪 141 本机部署，灵爪 SSH 调用，不许灵爪自己装**。违反：灵爪自装 mootdx → httpx 冲突 → adata 接口不稳老路。v1 错判教训：建议"灵爪自装"前必走 4 步（sharebox 历史 / lingzhua.md / MEMORY / 都没）。详见 details/lingzhua.md + china-stock-data-providers + evaluate-before-commit-data-sources。
+cycle-investment-masters skill（2026-08-09）：路径 ~/.hermes/skills/cycle-investment-masters/。三人交叉验证=周金涛(康波)+洪灏(中波+估值)+马克斯(心理)。每月 1 号拉 PMI/M1-M2/ERP/新开户 4 指标→更新 references/current-cycle-position-YYYYMM.md。重大事件（PMI 单月>1pct、ERP>5%）立即追加。2026-08：战略看多+战术谨慎+AI 仓位封顶 30-40%+黄金持有不追。马克斯细节在 the-most-important-thing skill。
+§
+灵爪部署铁律（2026-08-01）：数据接口 skill 必须龙爪 141 本机部署，灵爪 SSH 调用。详见 details/lingzhua.md + china-stock-data-providers + evaluate-before-commit-data-sources skill。
 §
 默认模型改为 minimax-m3（minimax-cn provider），2026-07-28 老大要求切换。当前 session 生效在下一次新建会话。
 §
