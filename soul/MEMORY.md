@@ -10,6 +10,6 @@ cycle-investment-masters skill（2026-08-09）：路径 ~/.hermes/skills/cycle-i
 §
 8/14 老大立的"自主决策"硬偏好（已固化到 stock-portfolio-management skill P0 第 5 条）：**"你不要问我了，你自己决定就好"**——小决策（批量套模板/cron 命名/监控阈值等）直接做，结果落 decision_log。例外三件仍要问：①超 6 万本金建仓 ②硬偏好冲突方案 ③跨 Agent 协调。**8/17 加 ④ "暂不 X" ≠ "撤 X"**（159326 反面教训）。**8/17 加 ⑤ 看当前趋势，不是死守之前定的规则**（继 7/31 不联想、8/14 自主决策 → 第 3 硬偏好，已固化对话偏好第 6 条）：add_position 触发位/止损位是初始设定不是铁律；老大问"X 可以加仓吗"先看实时趋势+量能+均线；趋势变了主动提"重算触发位"。典型反例：513120 add_position_3 1.20 → 老大纠正 → 重算 add_position_4 1.275。monitoring_snapshot 全套 + patch SDK 丢 path → Python 3 兜底。8/17 swing→swing_hold 模板 P0-20：strategy_note 重写 + 3 档 TP 全部 suspended 不删 + 加仓点下移 MA10 + 加仓量 1500-2000。
 §
-PVE 拓扑（2026-08-16 实测）：J4125-4L PVE 9.2.2 宿主=**31.20**（root=12345678），nic0/1/2/3（PVE 不叫 eth）。VM 101 ImmortalWrt=**31.50**（root=123456，真系统 boot=scsi0，336M 需扩），LuCI 200/403 假象（uhttpd fallback 缺 /www/luci）。apk update OK=11435 用 vsean.net 镜像待切官方源。详见 `网管/SKILL.md` §5.5/§5.6 + references/pve-installed-actual-state-20260816.md + references/pve-ip-migration-50-to-20-20260816.md。
+PVE 拓扑（2026-08-16）：J4125-4L PVE 9.2.2 宿主=**31.20**（root=12345678），nic0/1/2/3。VM 101 ImmortalWrt=**31.50**（root/**123456**），SSH 用 `sshpass -p '123456' ssh ...`（50 上无我公钥），LuCI 同密码。已装 daed 1.27.0（2026-08-23）等配置。详见 `网管/SKILL.md` §5.5/§5.6。
 §
 Bekaert PPT 偏好（书面化语言、整齐表格化、感悟"升华"非列表）+ 飞书自动投递 `hermes send --to feishu` 被 skip（用 `MEDIA:<path>`）。详见 bekaert-process-development skill P3/P5。
