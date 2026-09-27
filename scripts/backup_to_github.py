@@ -53,7 +53,10 @@ def _build_ssl_context():
 
 _SSL_CTX = _build_ssl_context()
 
-def http(method, url, token, body=None):
+import time
+
+def http(method, url, token, body=None, max_retries=4):
+    """HTTP call with retry on transient errors (400/5xx) and short socket timeout."""
     data = None
     headers = {
         "Authorization": "token " + token,
@@ -64,11 +67,23 @@ def http(method, url, token, body=None):
         data = json.dumps(body).encode()
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=60, context=_SSL_CTX) as resp:
-            return resp.status, resp.read()
-    except urllib.error.HTTPError as e:
-        return e.code, e.read()
+    last_code = None
+    last_body = b""
+    for attempt in range(max_retries):
+        try:
+            with urllib.request.urlopen(req, timeout=20, context=_SSL_CTX) as resp:
+                return resp.status, resp.read()
+        except urllib.error.HTTPError as e:
+            last_code, last_body = e.code, e.read()
+            # 401/404/422/422 are caller errors — don't retry, surface immediately
+            if last_code in (401, 403, 404, 422):
+                return last_code, last_body
+            # 400/5xx/transient: retry with backoff
+            time.sleep(0.8 * (2 ** attempt))
+        except Exception:
+            # network/SSL errors — retry
+            time.sleep(0.8 * (2 ** attempt))
+    return last_code if last_code is not None else 0, last_body
 
 
 def get_existing_sha(token, path):
@@ -150,6 +165,8 @@ def main():
             else:
                 failures.append((remote_path, err))
                 print("  !", remote_path, "FAIL:", err)
+        # small throttle to avoid GitHub anti-abuse throttling
+        time.sleep(0.4)
 
     print("\nDone. pushed=", pushed, "skipped=", skipped, "failed=", len(failures))
     if failures:
