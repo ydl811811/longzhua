@@ -37,6 +37,22 @@ def get_token():
     sys.exit("[ERROR] token not parseable")
 
 
+def _build_ssl_context():
+    import ssl
+    # Workaround: uv-bundled Python 3.11.15 uses OpenSSL 3.5 which produces a
+    # ClientHello that GitHub rejects with EOF during TLS 1.3 handshake.
+    # Force max protocol to TLS 1.2 — verified working.
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = True
+    ctx.verify_mode = ssl.CERT_REQUIRED
+    ctx.maximum_version = ssl.TLSVersion.TLSv1_2
+    # Load system + env-specified CA bundles explicitly. Setting SSL_CERT_FILE
+    # alone is not enough when a custom context is built.
+    ctx.load_default_certs()
+    return ctx
+
+_SSL_CTX = _build_ssl_context()
+
 def http(method, url, token, body=None):
     data = None
     headers = {
@@ -49,7 +65,7 @@ def http(method, url, token, body=None):
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with urllib.request.urlopen(req, timeout=60, context=_SSL_CTX) as resp:
             return resp.status, resp.read()
     except urllib.error.HTTPError as e:
         return e.code, e.read()
