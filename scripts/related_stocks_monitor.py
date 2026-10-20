@@ -86,16 +86,89 @@ def get_hsgt_top(trade_date: str) -> list:
     return []
 
 
-def check_signals(trade_date: str) -> list:
-    """检查所有关联股票信号（简化版：用板块映射替代逐只拉行情）"""
+HK_ALIAS = {
+    'BABA': 'hk09988', 'JD': 'hk09618', 'PDD': 'hk09888', 'NTES': 'hk09999',
+    'BIDU': 'hk09888', 'NIO': 'hk09866', 'XPEV': 'hk09868',
+}
+
+
+def to_market_code(code) -> str:
+    """观察池 code -> 腾讯行情 market code"""
+    s = str(code).strip().upper()
+    if s in HK_ALIAS:
+        return HK_ALIAS[s]
+    if s.isdigit():
+        if len(s) == 5:
+            return 'hk' + s
+        if len(s) == 6:
+            return ('sh' if s[0] in '56' else 'sz') + s
+    return ''
+
+
+def get_quotes(market_codes: list) -> dict:
+    """qt.gtimg.cn 批量行情（直连，不依赖 tushare 代理），单批最多 50 code"""
+    result = {}
+    codes = [x for x in market_codes if x]
+    for i in range(0, len(codes), 50):
+        batch = codes[i:i + 50]
+        try:
+            import requests
+            r = requests.get('http://qt.gtimg.cn/q=' + ','.join(batch), timeout=15)
+            text = r.content.decode('gbk', errors='ignore')
+        except Exception as e:
+            print(f'  [WARN] 行情源 qt.gtimg.cn 拉取失败: {type(e).__name__}: {e}')
+            continue
+        for line in text.strip().split('\n'):
+            if '="' not in line:
+                continue
+            key = line.split('="')[0].replace('v_', '')
+            parts = line.split('="')[1].strip('";').split('~')
+            if len(parts) > 32:
+                try:
+                    result[key] = {
+                        'name': parts[1],
+                        'price': float(parts[3]),
+                        'pct_change': float(parts[32]),
+                    }
+                except ValueError:
+                    pass
+        time.sleep(0.3)
+    return result
+
+
+def check_signals(trade_date: str):
+    """检查所有关联股票信号（信号1 涨跌幅走 qt.gtimg.cn 直连 + 信号2/3 走 tushare）"""
     pool = load_pool()
     triggers = []
 
-    # 拉数据
+    # 信号 1：当日涨跌幅（直连行情源，主信号，2026-10-20 启用）
+    all_mc = []
+    for h in pool['holdings']:
+        for s in h['related_stocks']:
+            mc = to_market_code(s['code'])
+            if mc:
+                all_mc.append(mc)
+    all_mc = sorted(set(all_mc))
+    quotes = get_quotes(all_mc)
+    missing = sorted(set(all_mc) - set(quotes.keys()))
+    print(f"  行情源 qt.gtimg.cn: 拉到 {len(quotes)}/{len(all_mc)} 只")
+    if missing:
+        print(f"  [WARN] 行情缺失 {len(missing)} 只: {missing}")
+
+    # 信号 2/3：北向 TOP10 + 龙虎榜（依赖 tushare 闲鱼代理，可能整体失效）
     top_list = get_top_list(trade_date)
     time.sleep(2)
     hsgt_top = get_hsgt_top(trade_date)
     time.sleep(2)
+
+    source_status = {
+        'qtimg_quote': 'ok' if quotes else 'fail',
+        'tushare_top_list': 'ok' if top_list else 'unavailable',
+        'tushare_hsgt_top10': 'ok' if hsgt_top else 'unavailable',
+    }
+    degraded = [k for k, v in source_status.items() if v == 'unavailable']
+    if degraded:
+        print(f"  [WARN] tushare 代理不可用 -> {degraded} 本次未评估（这是盲区，不是'无信号'）")
 
     # 索引化
     dragon_dict = {i.get('name', ''): i for i in top_list}
@@ -114,7 +187,10 @@ def check_signals(trade_date: str) -> list:
             stock_name = stock['name']
             signals = []
 
-            # 信号 1：跳过涨跌幅实时检查（避免限速，先用信号 2/3）
+            # 信号 1：当日涨跌幅超阈值（涨/跌双向）
+            q = quotes.get(to_market_code(stock_code))
+            if q and abs(q['pct_change']) >= threshold['pct_change']:
+                signals.append(f"涨跌幅 {q['pct_change']:+.2f}% (收 {q['price']})")
 
             # 信号 2：在北向 TOP10
             if threshold['north_top'] and stock_name in hsgt_names:
@@ -139,15 +215,17 @@ def check_signals(trade_date: str) -> list:
                 })
 
         if triggered_stocks:
+            neg = any('跌' in s for st in triggered_stocks for s in st['signal_types'])
             triggers.append({
                 'etf_code': etf_code,
                 'etf_name': etf_name,
                 'triggered_stocks': triggered_stocks,
                 'suggested_action': '评估ETF持仓：减仓/加仓/不动',
+                'direction_hint': '关联股走弱 -> 优先复核ETF均线与止损' if neg else '关联股走强 -> 偏正面信号',
                 'notify': True,
             })
 
-    return triggers
+    return triggers, source_status, missing
 
 
 def main():
@@ -159,11 +237,16 @@ def main():
 
     print(f"=== 关联股票观察池监控 ({trade_date}) ===\n")
 
-    triggers = check_signals(trade_date)
+    triggers, source_status, missing = check_signals(trade_date)
+    data_note = ', '.join(f"{k}={v}" for k, v in source_status.items())
 
     if not triggers:
-        print("✅ 无触发信号（关联股票全部平静）")
-        print("\n策略：维持当前 ETF 持仓方案")
+        if all(v == 'ok' for v in source_status.values()):
+            print("✅ 无触发信号（关联股票全部平静）")
+            print("\n策略：维持当前 ETF 持仓方案")
+        else:
+            print("⚠️ 无触发信号，但数据源不完整 -> 本次结论不完整，不可视为'全部平静'")
+            print(f"   数据源: {data_note}")
         return
 
     # 输出触发报告
@@ -185,6 +268,8 @@ def main():
         'date': trade_date,
         'ts': datetime.now().isoformat(),
         'triggers': triggers,
+        'data_source_status': source_status,
+        'data_source_note': data_note,
     })
     with open(log_file, 'w') as f:
         yaml.dump(history, f, default_flow_style=False, allow_unicode=True)
