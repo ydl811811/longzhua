@@ -126,43 +126,100 @@ def get_global_indices():
         try:
             raw = fetch(f"https://qt.gtimg.cn/q={','.join(us_codes_tx.keys())}")
             for line in raw.strip().split('\n'):
-                if '="':
-                    line = line.split('="', 1)[1]
+                orig = line
+                if '="' in orig:
+                    line = orig.split('="', 1)[1]
                 if '"' not in line:
                     continue
-                m = re.search(r'v_(\w+)=', line)
+                # NOTE 正则必须匹配未剥离的原始行。老代码对已剥离行跑 v_(\w+)=
+                # 必然匹配不到, 静默返回空 dict, 晨报 4 个指数全部显示暂无数据
+                # 2026-10-21 修复
+                m = re.search(r'v_(\w+)=', orig)
                 if not m:
                     continue
                 code = m.group(1)
                 if code not in us_codes_tx:
                     continue
-                parts = line.split('=')[1].strip('"').split('~')
+                parts = line.split('~')
                 if len(parts) > 4 and parts[3] and parts[4]:
                     try:
                         price = float(parts[3])
                         prev = float(parts[4])
                         chg = (price / prev - 1) * 100 if prev else 0
                         result[us_codes_tx[code]] = {'price': price, 'prev': prev, 'chg': chg}
-                    except:
+                    except Exception:
                         pass
-            print(f"  ⚠️ 美股数据回退腾讯接口（数据可能不准）")
+            if result:
+                print(f"  [WARN] 美股数据回退腾讯接口(数据可能不准, {len(result)} 个指数)")
+            else:
+                print(f"  [WARN] 腾讯美股接口解析为空(regex 未命中)")
         except Exception as e:
             print(f"  腾讯美股数据也获取失败: {e}")
 
-    # 日经225 - Yahoo Finance
-    try:
-        url = "https://query1.finance.yahoo.com/v8/finance/chart/%5EN225?interval=1d&range=2d"
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=8) as r:
-            data = json.loads(r.read().decode('utf-8'))
-        meta = data['chart']['result'][0]['meta']
-        price = meta.get('regularMarketPrice', 0)
-        prev = meta.get('chartPreviousClose', 0)
-        if price and prev:
-            chg = (price / prev - 1) * 100
-            result['日经225'] = {'price': price, 'prev': prev, 'chg': chg}
-    except Exception as e:
-        print(f"  日经数据获取失败: {e}")
+    # 新浪全球指数兜底 (2026-10-21 新增)
+    # Yahoo 403 + 东财 push2 IP 被封 + 腾讯 US parser 曾失效 -> 三重失效时救场
+    # gb_$ndx / gb_$dji / gb_$inx 与腾讯 usNDX/usDJI/usINX 实测完全一致;
+    # 日经用 b_NKY (gb_$n225 系列全部为空)。int_* 系列数据陈旧(纳指 22484 vs 实际 29490), 禁用。
+    sina_codes = {
+        'gb_$ndx': '纳斯达克100',
+        'gb_$dji': '道琼斯',
+        'gb_$inx': '标普500',
+        'b_NKY': '日经225',
+    }
+    # 日经 b_NKY 字段错位一位: f[2]=绝对涨跌(621.34), f[3]=涨跌幅%(0.97)
+    # gb_$* 系列 f[2] 直接就是涨跌幅%(-0.13)。两者不可混用。
+    sina_chg_idx = {'gb_$ndx': 2, 'gb_$dji': 2, 'gb_$inx': 2, 'b_NKY': 3}
+    need = {k: v for k, v in sina_codes.items() if v not in result}
+    if need:
+        ok_names = []
+        try:
+            raw_s = fetch(
+                "https://hq.sinajs.cn/list=" + ','.join(need.keys()),
+                headers={'User-Agent': 'Mozilla/5.0',
+                         'Referer': 'https://finance.sina.com.cn'})
+            for ln in raw_s.strip().split('\n'):
+                m_s = re.search(r'hq_str_([^=]+?)\*?="', ln)
+                if not m_s:
+                    continue
+                c = m_s.group(1)
+                if c not in need:
+                    continue
+                body = ln.split('="', 1)[1].rstrip('";')
+                f = body.split(',')
+                # 新浪全球指数格式: 名称,价格,涨跌幅,...
+                # gb_$ndx = 名称,29490.28,-0.13,2026-10-21 05:30:00,...
+                # b_NKY   = 名称,64696.69,621.34,0.97,2:12 AM,...  <- 百分比在 f[3]
+                ci = sina_chg_idx.get(c, 2)
+                if len(f) <= ci or not f[1]:
+                    continue
+                try:
+                    price = float(f[1])
+                    chg = float(f[ci])
+                    prev = price / (1 + chg / 100) if chg != -100 else price
+                    result[need[c]] = {'price': price, 'prev': prev, 'chg': chg}
+                    ok_names.append(need[c])
+                except (ValueError, ZeroDivisionError):
+                    continue
+            if ok_names:
+                print(f"  [OK] 新浪兜底补齐 {len(ok_names)} 个指数: {', '.join(ok_names)}")
+        except Exception as e:
+            print(f"  新浪兜底失败: {e}")
+
+    # 日经225 - Yahoo Finance(东财已覆盖时跳过, 减少无谓请求)
+    if '日经225' not in result:
+        try:
+            url = "https://query1.finance.yahoo.com/v8/finance/chart/%5EN225?interval=1d&range=2d"
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=8) as r:
+                data = json.loads(r.read().decode('utf-8'))
+            meta = data['chart']['result'][0]['meta']
+            price = meta.get('regularMarketPrice', 0)
+            prev = meta.get('chartPreviousClose', 0)
+            if price and prev:
+                chg = (price / prev - 1) * 100
+                result['日经225'] = {'price': price, 'prev': prev, 'chg': chg}
+        except Exception as e:
+            print(f"  日经数据获取失败: {e}")
 
     return result
 
@@ -307,6 +364,9 @@ def get_portfolio_quotes():
                 price = float(parts[3])
                 prev = float(parts[4])
                 chg = (price / prev - 1) * 100 if prev else 0
+                # 开盘前腾讯会把日涨跌字段清零(price==prev, open==0) -> 显示 +0.00% 是假象,
+                # 且会污染 calculate_verdict 的持仓均值。标记 pre_open 并排除出打分。
+                pre_open = (float(parts[5] or 0) == 0)
                 name = names.get(code_raw, parts[1])
                 quotes.append({
                     'code': code_raw,
@@ -314,6 +374,7 @@ def get_portfolio_quotes():
                     'price': price,
                     'prev': prev,
                     'chg': chg,
+                    'pre_open': pre_open,
                     'shares': shares_map.get(code_raw, 0),
                 })
             except:
@@ -364,9 +425,10 @@ def calculate_verdict(indices, quotes):
         elif chg <= -0.5:
             score -= 1
     
-    # 持仓标的
-    if quotes:
-        avg_chg = sum(q['chg'] for q in quotes) / len(quotes)
+    # 持仓标的（排除开盘前快照：腾讯此时日涨跌恒为 0，会把均值拉向中性）
+    traded = [q for q in quotes if not q.get('pre_open')]
+    if traded:
+        avg_chg = sum(q['chg'] for q in traded) / len(traded)
         if avg_chg >= 1:
             score += 1
         elif avg_chg <= -1:
@@ -449,10 +511,14 @@ def generate_report():
         lines.append("暂无快讯")
 
     lines.append("")
-    lines.append("## 三、持仓标的（昨结算参考）")
+    all_pre = quotes and all(q.get('pre_open') for q in quotes)
+    if all_pre:
+        lines.append("## 三、持仓标的（开盘前快照，涨跌幅未生成）")
+    else:
+        lines.append("## 三、持仓标的（昨结算参考）")
     if quotes:
         for q in quotes:
-            chg_str = f"{q['chg']:+.2f}%"
+            chg_str = f"{q['chg']:+.2f}%" if not q.get('pre_open') else "（待开盘）"
             shares_str = f" ({q['shares']:,}份)" if q.get('shares', 0) > 0 else ""
             lines.append(f"- {q['name']}: {q['price']:.3f} {chg_str}{shares_str}")
     else:
