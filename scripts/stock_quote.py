@@ -199,8 +199,18 @@ def eastmoney_batch(secids: str) -> list[dict]:
     url = f"https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&secids={secids}&fields=f12,f14,f2,f3,f5,f6,f9"
     raw = http_get(url, timeout=8).decode('utf-8', errors='replace')
     data = json.loads(raw)
+    # 空值防护：东财对无效 secid（如市场前缀写错）返回 data=null，
+    # 直接 .get('data', {}) 会得到 None，再取 .get('diff') 抛 AttributeError。
+    # 这里显式兜底并给出可读报错，避免把参数错误误判为"上游通道故障"。
+    payload = data.get('data') if isinstance(data, dict) else None
+    if not payload:
+        raise ValueError(
+            "东方财富返回 data=null（无效 secid）。请检查市场前缀："
+            "沪市=1. 深市=0. 例如 0.159299 / 1.588080；"
+            f"当前 secids={secids!r}"
+        )
     results = []
-    for item in data.get('data', {}).get('diff', []):
+    for item in payload.get('diff', []) or []:
         results.append({
             'code': item.get('f12'),
             'name': item.get('f14'),
