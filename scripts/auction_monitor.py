@@ -47,6 +47,17 @@ def load_targets():
         tp1 = p.get('take_profit_1')
         tp2 = p.get('take_profit_2')
         note = p.get('note', '')
+        # 台账 TP 是嵌套 take_profit 列表（level/target/status），旧扁平字段 take_profit_1/2 早已停用
+        # → 只取 status=pending 的档位，否则止盈预警永远不触发
+        tp_list = p.get('take_profit')
+        if isinstance(tp_list, list):
+            pend = [t.get('target') for t in tp_list
+                    if isinstance(t, dict) and t.get('status') == 'pending' and t.get('target')]
+            if pend:
+                if tp1 is None:
+                    tp1 = pend[0]
+                if tp2 is None and len(pend) > 1:
+                    tp2 = pend[1]
         if code and name:
             prefix = 'sh' if market == 'sh' else 'sz'
             HOLDINGS.append((f'{prefix}{code}', name, sl, tp1, tp2, note))
@@ -111,14 +122,16 @@ def fetch_tencent(codes):
             vol = int(float(fields[6])) if fields[6] else 0
             chg_pct = float(fields[32]) if fields[32] else 0.0
 
+            # 五档结构：买1..买5 = f[10](量) f[11](价) f[12](量) f[13](价) ...
+            # → 只取偶数下标（成交量），否则把价格也加进比值，比值被严重扭曲
             def to_int(v):
                 try:
                     return int(float(v))
                 except:
                     return 0
 
-            buy_total = sum(to_int(fields[i]) for i in range(10, 20))
-            sell_total = sum(to_int(fields[i]) for i in range(20, 30))
+            buy_total = sum(to_int(fields[i]) for i in (10, 12, 14, 16, 18))
+            sell_total = sum(to_int(fields[i]) for i in (20, 22, 24, 26, 28))
             waipan_ratio = round(buy_total / sell_total, 2) if sell_total > 0 else 0.0
 
             # 竞价价 = parts[9]
@@ -150,12 +163,15 @@ def holding_signal(d, stop_loss, tp1, tp2):
     cur_open = d['open']
     pre_close = d['pre_close']
 
+    # 竞价量过小（如 15 手）→ 五档比是空挂单噪声，不参与信号判定
+    thin = d.get('vol', 0) < 500
+
     # 检测是否接近止损
     near_stop = False
     near_tp = False
     if stop_loss and pre_close:
         stop_dist = (cur_open - stop_loss) / stop_loss * 100
-        if stop_dist <= 2.0:  # 距止损2%以内
+        if stop_dist <= 2.0:  # 距止损2%以内（含已跌破）
             near_stop = True
     if tp1 and pre_close:
         tp_dist = (tp1 - cur_open) / cur_open * 100
@@ -163,6 +179,13 @@ def holding_signal(d, stop_loss, tp1, tp2):
             near_tp = True
 
     # 信号判断（持仓→偏风险监控）
+    if stop_loss and pre_close and cur_open and stop_loss:
+        # 已跌破止损线：按跌破深度分级，比"接近止损"更严重
+        stop_dist = (cur_open - stop_loss) / stop_loss * 100
+        if stop_dist < 0:
+            if stop_dist <= -5.0:
+                return f'🔴已破止损{stop_dist:.1f}%！需处置'
+            return f'🔴已破止损{stop_dist:.1f}%'
     if near_stop and ratio < 0.8:
         return '🔴临近止损！卖压重'
     elif near_stop:
@@ -181,6 +204,8 @@ def holding_signal(d, stop_loss, tp1, tp2):
         return '🟡偏强'
     elif ratio <= 0.5 and chg <= -1.0:
         return '🟠卖压偏重'
+    elif thin:
+        return '⚪正常(竞价量薄)'
     else:
         return '⚪正常'
 
@@ -233,6 +258,13 @@ def build_report(data, holdings, candidates):
         ratio_str = f"{d['waipan_ratio']:.2f}"
         open_str = f"{d['open']:.3f}"
 
+        # open=0 → 竞价无成交（不是「平稳」），必须显式标注
+        if d['open'] == 0:
+            open_str = '0.000'
+            sig = '⚠️竞价无成交'
+        elif d.get('vol', 0) < 500 and '薄' not in sig:
+            sig += '(薄量)'
+
         holding_rows.append(
             f"{name:<10}{mc:<12}{open_str:>8}{chg_str:>8}{vol_str:>8}{ratio_str:>6}  {sig}"
         )
@@ -250,12 +282,16 @@ def build_report(data, holdings, candidates):
         cur = d['open']
         if sl and sl > 0:
             sl_dist = (cur - sl) / sl * 100
-            if sl_dist <= 3.0:
-                sl_alerts.append(f"  {name}: 距止损{sl:.2f}仅{sl_dist:+.1f}% ({cur:.3f})")
+            if sl_dist < 0:
+                sl_alerts.append(f"  🔴 {name}: 已破止损{sl:.2f} {sl_dist:.1f}% (现价{cur:.3f})")
+            elif sl_dist <= 3.0:
+                sl_alerts.append(f"  🟠 {name}: 距止损{sl:.2f}仅{sl_dist:.1f}% (现价{cur:.3f})")
         if tp1 and tp1 > 0:
             tp_dist = (tp1 - cur) / cur * 100
-            if tp_dist <= 3.0:
-                tp_alerts.append(f"  {name}: 距TP1{tp1:.2f}仅{tp_dist:+.1f}% ({cur:.3f})")
+            if 0 <= tp_dist <= 3.0:
+                tp_alerts.append(f"  {name}: 距TP1{tp1:.2f}仅{tp_dist:.1f}% (现价{cur:.3f})")
+            elif tp_dist < 0:
+                tp_alerts.append(f"  🎯 {name}: 已过TP1{tp1:.2f} {abs(tp_dist):.1f}% (现价{cur:.3f})")
 
     if sl_alerts:
         lines.append("")
@@ -288,6 +324,12 @@ def build_report(data, holdings, candidates):
             vol_str = f"{d['vol_wan']:.1f}万"
             ratio_str = f"{d['waipan_ratio']:.2f}"
             open_str = f"{d['open']:.3f}"
+
+            if d['open'] == 0:
+                open_str = '0.000'
+                sig = '⚠️竞价无成交'
+            elif d.get('vol', 0) < 500 and '薄' not in sig:
+                sig += '(薄量)'
 
             lines.append(
                 f"{name:<10}{mc:<12}{open_str:>8}{chg_str:>8}{vol_str:>8}{ratio_str:>6}  {sig}"
