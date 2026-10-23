@@ -340,6 +340,32 @@ def check_watched(code, name, market, cfg, state):
     if sig_type == 'watch':
         return f'{name} {price:.2f}({data["chg_pct"]:+.2f}%) 观察中', state
 
+    # ── 2026-10-23 修复 2 坑（备份 stock_monitor.py.bak.20261023_0950_pre_new_theme_fix）──
+    #
+    # 坑 1：已跌破自身止损位的候选，一律不推建仓信号。
+    #       P0-15 四件套里 remove_triggers 定义了"收盘价 < stop_loss → 移出候选"，
+    #       在止损位下方再喊"请确认建仓"是自相矛盾的信号（2026-10-23 09:30 英维克
+    #       42.80 < SL 43.0、09:35 禾望电气 21.89 < SL 25.0 被推建仓信号）。
+    if sl and price <= float(sl):
+        return f'{name} {price:.2f}({data["chg_pct"]:+.2f}%) 已破止损{sl}，不触发建仓', state
+
+    # 坑 2：new_theme 型（status=waiting_observe）的触发方向是"涨到 entry_max"
+    #       （距 60 日高点收窄至 -25% 内），不是"跌到 entry_max 以下"。
+    #       旧代码让 new_theme 落到默认 pullback 分支 → 现价远低于 entry_max 时恒成立
+    #       → 9/30 英维克 / 9/35 禾望电气 假建仓信号（两者都远在 entry_max 之下，
+    #       涨到 82.86 / 50.25 才够到建仓评估位）。
+    if sig_type == 'new_theme':
+        if price >= float(trigger_price) and ratio >= rmn:
+            tier = 'new_theme'
+            if state_should_trigger(state, code, tier):
+                msg = f'✅ {name} 达到建仓评估位！{price:.2f}({data["chg_pct"]:+.2f}%) ≥ {trigger_price}，五档比{ratio:.2f}'
+                if sl: msg += f'，止损{sl}'
+                msg += '，请确认建仓'
+                send_feishu(msg, '✅')
+                state = state_mark(state, code, tier)
+                return msg, state
+        return f'{name} {price:.2f}({data["chg_pct"]:+.2f}%) 等待涨至{trigger_price}', state
+
     # reversal 型：反弹站回 entry_max
     if sig_type == 'reversal':
         if price >= float(trigger_price) and ratio >= rmn:
