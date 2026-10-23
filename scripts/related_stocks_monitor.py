@@ -19,6 +19,7 @@ import sys
 import os
 import json
 import argparse
+import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -125,11 +126,16 @@ def get_quotes(market_codes: list) -> dict:
             parts = line.split('="')[1].strip('";').split('~')
             if len(parts) > 32:
                 try:
-                    result[key] = {
+                    item = {
                         'name': parts[1],
                         'price': float(parts[3]),
                         'pct_change': float(parts[32]),
                     }
+                    ts = parts[30] if len(parts) > 30 else ''
+                    digits = re.sub(r'\D', '', ts)
+                    if len(digits) >= 8:
+                        item['trade_date'] = digits[:8]
+                    result[key] = item
                 except ValueError:
                     pass
         time.sleep(0.3)
@@ -155,10 +161,18 @@ def check_signals(trade_date: str):
     if missing:
         print(f"  [WARN] 行情缺失 {len(missing)} 只: {missing}")
 
+    # 真实行情交易日（qt.gtimg.cn 返回的是最近一个已收盘交易日）
+    quote_days = sorted(set(q.get('trade_date') for q in quotes.values() if q.get('trade_date')))
+    quote_trade_date = quote_days[-1] if quote_days else None
+    print(f"  行情交易日: {quote_trade_date or '未知'}")
+
+    # tushare 查询用真实行情交易日（--date 传的是 yesterday，盘中收盘后已过期）
+    query_date = quote_trade_date or trade_date
+
     # 信号 2/3：北向 TOP10 + 龙虎榜（依赖 tushare 闲鱼代理，可能整体失效）
-    top_list = get_top_list(trade_date)
+    top_list = get_top_list(query_date)
     time.sleep(2)
-    hsgt_top = get_hsgt_top(trade_date)
+    hsgt_top = get_hsgt_top(query_date)
     time.sleep(2)
 
     source_status = {
@@ -215,17 +229,30 @@ def check_signals(trade_date: str):
                 })
 
         if triggered_stocks:
-            neg = any('跌' in s for st in triggered_stocks for s in st['signal_types'])
+            # 方向判定必须用真实涨跌幅符号，不能字符串匹配（'涨跌幅' 本身含 '跌' 字）
+            pcts = []
+            for st in triggered_stocks:
+                q = quotes.get(to_market_code(st['code']))
+                if q:
+                    pcts.append(q['pct_change'])
+            neg = any(p < 0 for p in pcts)
+            has_pos = any(p > 0 for p in pcts)
+            if neg and has_pos:
+                hint = '关联股涨跌互现 -> 分化信号，逐只看方向'
+            elif neg:
+                hint = '关联股走弱 -> 优先复核ETF均线与止损'
+            else:
+                hint = '关联股走强 -> 偏正面信号'
             triggers.append({
                 'etf_code': etf_code,
                 'etf_name': etf_name,
                 'triggered_stocks': triggered_stocks,
                 'suggested_action': '评估ETF持仓：减仓/加仓/不动',
-                'direction_hint': '关联股走弱 -> 优先复核ETF均线与止损' if neg else '关联股走强 -> 偏正面信号',
+                'direction_hint': hint,
                 'notify': True,
             })
 
-    return triggers, source_status, missing
+    return triggers, source_status, missing, quote_trade_date
 
 
 def main():
@@ -235,10 +262,13 @@ def main():
 
     trade_date = args.date or datetime.now().strftime("%Y%m%d")
 
-    print(f"=== 关联股票观察池监控 ({trade_date}) ===\n")
+    print(f"=== 关联股票观察池监控 (--date {trade_date}) ===\n")
 
-    triggers, source_status, missing = check_signals(trade_date)
+    triggers, source_status, missing, quote_trade_date = check_signals(trade_date)
     data_note = ', '.join(f"{k}={v}" for k, v in source_status.items())
+    log_date = quote_trade_date or trade_date
+
+    print(f"  实际监控交易日: {quote_trade_date or trade_date}（--date 仅作兜底）\n")
 
     if not triggers:
         if all(v == 'ok' for v in source_status.values()):
@@ -264,13 +294,25 @@ def main():
     if log_file.exists():
         with open(log_file) as f:
             history = yaml.safe_load(f) or []
-    history.append({
-        'date': trade_date,
+    entry = {
+        'date': log_date,
         'ts': datetime.now().isoformat(),
+        'quote_trade_date': quote_trade_date,
+        'tushare_query_date': trade_date,
         'triggers': triggers,
         'data_source_status': source_status,
         'data_source_note': data_note,
-    })
+    }
+
+    # 幂等：同一交易日重复跑 → 替换当天旧条目（保留最后一次），不追加重复
+    def _sig(e):
+        return tuple(sorted(
+            (t.get('etf_code'), tuple(sorted(s.get('code') for s in (t.get('triggered_stocks') or []))))
+            for t in (e.get('triggers') or [])))
+
+    history = [e for e in history
+               if not (e.get('date') == log_date and _sig(e) == _sig(entry))]
+    history.append(entry)
     with open(log_file, 'w') as f:
         yaml.dump(history, f, default_flow_style=False, allow_unicode=True)
     print(f"\n📝 触发记录已保存到 {log_file}")
