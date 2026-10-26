@@ -239,10 +239,20 @@ def check_position(code, name, market, cfg, state):
 
     # 1. 止损
     sl = cfg.get('stop_loss')
-    if sl and price <= float(sl):
+    # ── 2026-10-26 修复（观察期口径，与集合竞价日报 10/26 同口径）────────
+    # observation_mode_*.enabled 的持仓，红线是 exit_line 不是台账 stop_loss：
+    #   513050 SL 1.06 vs 现价 0.946 (-10.8%)、159326 SL 1.50 vs 1.433 (-4.5%)
+    #   两条 stop_loss 早已失效，继续按它推送 = 每日假止损噪音。
+    # exit_line（离场线）+ 减亏线由 remaining3_watchdog.py 独占推送
+    #   （cron 2683e138ccda 15:35 收盘 + 2ecb3813de71 */15 盘中），本脚本不重复推。
+    obs = cfg.get('observation_mode_20261023') or {}
+    obs_on = bool(obs.get('enabled')) and obs.get('exit_line') is not None
+    if obs_on:
+        sl = float(obs['exit_line'])   # 显示用红线改成离场线
+    if not obs_on and cfg.get('stop_loss') and price <= float(cfg['stop_loss']):
         tier = 'stop_loss'
         if state_should_trigger(state, code, tier):
-            msg = f'🔴 {name} 触发止损！现价{price:.3f} ≤ 止损{sl}，请确认卖出'
+            msg = f'🔴 {name} 触发止损！现价{price:.3f} ≤ 止损{cfg["stop_loss"]}，请确认卖出'
             send_feishu(msg, '🔴')
             state = state_mark(state, code, tier)
             return msg, state
@@ -263,7 +273,9 @@ def check_position(code, name, market, cfg, state):
         target = tp_item.get('target')
         status = tp_item.get('status', 'pending')
         # 跳过已 cleared / done 的 TP（实物化后不再触发）
-        if status in ('cleared', 'done'):
+        # 2026-10-26: suspended 也跳过（159326 8/17 B 方案老大手动挂起 TP1-3，
+        #   挂起状态不应由脚本自动恢复推送）
+        if status in ('cleared', 'done', 'suspended'):
             continue
         if target and price >= float(target):
             tier = f"tp{tp_item['level']}"
@@ -304,7 +316,13 @@ def check_position(code, name, market, cfg, state):
                 return msg, state
 
     # 不触发 → 仅返回状态文本
-    sl_str = f'止损{sl}' if sl else ''
+    # 2026-10-26: 返回纯字符串（不是 tuple）→ 调用方不会把它塞进 triggered_msgs
+    if obs_on:
+        sl_str = f'离场线{sl}'
+        mode_tag = '[观察期]'
+    else:
+        sl_str = f'止损{sl}' if sl else ''
+        mode_tag = ''
     # v3 schema tp list 转 str
     tp_str = ' '.join([f"TP{i['level']}={i['target']}({i.get('status','?')[:3]})" for i in tp_list])
     # LONGZHUA FIXED 2026-08-04: 之前用 TP 循环的 target 变量显示，导致 add_str 始终 None；
@@ -313,8 +331,11 @@ def check_position(code, name, market, cfg, state):
     for a in add_list:
         add_str_parts.append(f"加仓{a['level']}={a['target']}")
     add_str = ' '.join(add_str_parts)
-    info = f'{name} {price:.3f}({data["chg_pct"]:+.2f}%) 五档比{ratio:.2f} | {sl_str} | {tp_str} {add_str}'.strip()
-    return info, state
+    head = f'{name} {price:.3f}({data["chg_pct"]:+.2f}%) 五档比{ratio:.2f}'
+    if mode_tag:
+        head += f' {mode_tag}'
+    info = f'{head} | {sl_str} | {tp_str} {add_str}'.strip()
+    return info
 
 
 # ─── 候选股监控 ───────────────────────────────────────────────────────────
@@ -327,18 +348,18 @@ def check_watched(code, name, market, cfg, state):
     sig_type     = cfg.get('signal_type', 'pullback')
 
     if trigger_price is None:
-        return f'{name} 无 entry_max 跳过', state
+        return f'{name} 无 entry_max 跳过'
 
     data = fetch_stock(code, market)
     if 'err' in data:
-        return f'{name} 数据获取失败: {data["err"]}', state
+        return f'{name} 数据获取失败: {data["err"]}'
 
     price = data['price']
     ratio = data['ratio']
 
     # watch 型：只观察不触发
     if sig_type == 'watch':
-        return f'{name} {price:.2f}({data["chg_pct"]:+.2f}%) 观察中', state
+        return f'{name} {price:.2f}({data["chg_pct"]:+.2f}%) 观察中'
 
     # ── 2026-10-23 修复 2 坑（备份 stock_monitor.py.bak.20261023_0950_pre_new_theme_fix）──
     #
@@ -347,7 +368,7 @@ def check_watched(code, name, market, cfg, state):
     #       在止损位下方再喊"请确认建仓"是自相矛盾的信号（2026-10-23 09:30 英维克
     #       42.80 < SL 43.0、09:35 禾望电气 21.89 < SL 25.0 被推建仓信号）。
     if sl and price <= float(sl):
-        return f'{name} {price:.2f}({data["chg_pct"]:+.2f}%) 已破止损{sl}，不触发建仓', state
+        return f'{name} {price:.2f}({data["chg_pct"]:+.2f}%) 已破止损{sl}，不触发建仓'
 
     # 坑 2：new_theme 型（status=waiting_observe）的触发方向是"涨到 entry_max"
     #       （距 60 日高点收窄至 -25% 内），不是"跌到 entry_max 以下"。
@@ -364,7 +385,7 @@ def check_watched(code, name, market, cfg, state):
                 send_feishu(msg, '✅')
                 state = state_mark(state, code, tier)
                 return msg, state
-        return f'{name} {price:.2f}({data["chg_pct"]:+.2f}%) 等待涨至{trigger_price}', state
+        return f'{name} {price:.2f}({data["chg_pct"]:+.2f}%) 等待涨至{trigger_price}'
 
     # reversal 型：反弹站回 entry_max
     if sig_type == 'reversal':
@@ -377,7 +398,7 @@ def check_watched(code, name, market, cfg, state):
                 send_feishu(msg, '✅')
                 state = state_mark(state, code, tier)
                 return msg, state
-        return f'{name} {price:.2f}({data["chg_pct"]:+.2f}%) 等反弹≥{trigger_price}', state
+        return f'{name} {price:.2f}({data["chg_pct"]:+.2f}%) 等反弹≥{trigger_price}'
 
     # pullback 型（默认）：回调到 entry_max 以下
     if price <= float(trigger_price) and ratio >= rmn:
@@ -390,7 +411,7 @@ def check_watched(code, name, market, cfg, state):
             state = state_mark(state, code, tier)
             return msg, state
 
-    return f'{name} {price:.2f}({data["chg_pct"]:+.2f}%) 等待回调≤{trigger_price}', state
+    return f'{name} {price:.2f}({data["chg_pct"]:+.2f}%) 等待回调≤{trigger_price}'
 
 
 # ─── YAML 解析（最简版，避免依赖 PyYAML）──────────────────────────────────
