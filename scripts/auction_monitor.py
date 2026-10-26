@@ -6,15 +6,23 @@
 """
 
 import urllib.request
+import urllib.parse
 import re
 import os
 import sys
+import socket
+import ssl
+import http.client
 from datetime import datetime
 
 # ===================== 配置 =====================
 MONITOR_FILE = '/home/yu/.hermes/stock-portfolio/monitor_positions.yaml'
 PORTFOLIO_FILE = '/home/yu/.hermes/stock-portfolio/portfolio.yaml'
+WATCHED_FILE = '/home/yu/.hermes/stock-portfolio/monitor_watched.yaml'
 OUTPUT_FILE = '/home/yu/.hermes/cron/output/auction_monitor.txt'
+# 竞价快照缓存（按交易日）：09:25 跑完固化，之后重跑仍显示 09:25 竞价数据，
+# 避免开盘后「竞价量」变成累计成交量导致口径漂移。
+SNAP_FILE = '/home/yu/.hermes/stock-portfolio/.auction_snapshot.json'
 # ===================== 配置 =====================
 
 import yaml
@@ -58,9 +66,29 @@ def load_targets():
                     tp1 = pend[0]
                 if tp2 is None and len(pend) > 1:
                     tp2 = pend[1]
+        # 观察期离场线（observation_mode_20261023.enabled）优先于台账 stop_loss
+        # 原因：2026-10-23 老大定「剩余 3 只再观察一下」→ 台账 SL 早已破但语义是
+        # 「不主动减仓」，真正的红线是 exit_line。玲珑 decision_engine 已用同样口径，
+        # 竞价脚本不同步就会天天误报「已破止损！需处置」（与玲珑重复噪音同源）。
+        obs = p.get('observation_mode_20261023')
+        obs_on = False
+        exit_line = None
+        relief_lines = []
+        if isinstance(obs, dict) and obs.get('enabled'):
+            obs_on = True
+            el = obs.get('exit_line')
+            if el:
+                try:
+                    exit_line = float(el)
+                except (TypeError, ValueError):
+                    exit_line = None
+            rl = obs.get('relief_lines') or ''
+            relief_lines = [float(x) for x in re.findall(r'\d+\.\d+', str(rl))]
+
         if code and name:
             prefix = 'sh' if market == 'sh' else 'sz'
-            HOLDINGS.append((f'{prefix}{code}', name, sl, tp1, tp2, note))
+            HOLDINGS.append((f'{prefix}{code}', name, sl, tp1, tp2, note,
+                             obs_on, exit_line, relief_lines))
 
     # ─── 2. 候选股（portfolio.yaml watched_stocks + watched_funds） ───
     try:
@@ -77,7 +105,7 @@ def load_targets():
         market = w.get('market', 'sh')
         if code and name:
             prefix = 'sh' if market == 'sh' else 'sz'
-            CANDIDATES.append((f'{prefix}{code}', name))
+            CANDIDATES.append((f'{prefix}{code}', name, None, None))
 
     # 候选股
     for w in pf.get('watched_stocks', []):
@@ -86,23 +114,81 @@ def load_targets():
         market = w.get('market', 'sh')
         if code and name:
             prefix = 'sh' if market == 'sh' else 'sz'
-            CANDIDATES.append((f'{prefix}{code}', name))
+            CANDIDATES.append((f'{prefix}{code}', name, None, None))
+
+    # 真实候选池（monitor_watched.yaml watched[]：带 entry_max/entry_min 触发区间）
+    # —— portfolio.yaml 只列了 7 只，监控脚本 stock_monitor.py 用的是这 15 只，
+    #    竞价报告必须与之一致，否则「距触发位」无从谈起。
+    try:
+        with open(WATCHED_FILE, 'r') as f:
+            wdoc = yaml.safe_load(f)
+    except Exception as e:
+        print(f"[WARN] 无法读取 {WATCHED_FILE}: {e}", file=sys.stderr)
+        wdoc = {}
+
+    for w in (wdoc or {}).get('watched', []):
+        code = str(w.get('code', ''))
+        name = w.get('name', '')
+        market = w.get('market', 'sh')
+        if not (code and name):
+            continue
+        prefix = 'sh' if market == 'sh' else 'sz'
+        kind = w.get('signal_type', 'pullback')
+        emax = w.get('entry_max')
+        emin = w.get('entry_min')
+        rmn = w.get('ratio_min', 1.0) or 1.0
+        sl = w.get('stop_loss')
+        status = str(w.get('status') or '')
+        suspended = status.startswith('cleared') or 'suspend' in status.lower()
+        trig = None
+        trig_str = None
+        if emax:
+            trig = (kind, float(emax), float(emin) if emin else None,
+                    float(rmn), float(sl) if sl else None, suspended)
+            trig_str = f"{float(emin):.3f}~{float(emax):.3f}" if emin else f"≤{float(emax):.3f}"
+        CANDIDATES.append((f'{prefix}{code}', name, trig, trig_str))
 
     # 去重：候选不重复，且不包含已在持仓中的
     holding_codes = {h[0] for h in HOLDINGS}
-    CANDIDATES = [c for c in CANDIDATES if c[0] not in holding_codes]
+    seen = set()
+    dedup = []
+    for c in CANDIDATES:
+        if c[0] in holding_codes or c[0] in seen:
+            continue
+        seen.add(c[0])
+        dedup.append(c)
+    CANDIDATES = dedup
 
     return HOLDINGS, CANDIDATES
 
 
 def fetch_tencent(codes):
-    """腾讯接口批量获取行情"""
+    """腾讯接口批量获取行情
+    ⚠️ 必须用 IPv4-only 解析 —— qt.gtimg.cn 的 IPv6 端点无响应（不回包），
+    urllib 默认 IPv6 优先 → SSL 握手永久挂起 → 全表「数据获取失败」。
+    monkey-patch socket.getaddrinfo 拦不住 http.client，必须显式取 AF_INET 地址。
+    """
     url = f"https://qt.gtimg.cn/q={','.join(codes)}"
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.hostname
+    port = parsed.port or 443
+    path = parsed.path + ('?' + parsed.query if parsed.query else '')
+
+    raw = None
     try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            raw = resp.read().decode('gbk', errors='replace')
+        addrs = [a[4] for a in socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)]
+        sock = socket.create_connection(addrs[0], timeout=10)
+        try:
+            ctx = ssl.create_default_context()
+            sock = ctx.wrap_socket(sock, server_hostname=host)
+            conn = http.client.HTTPConnection(host, port, timeout=10)
+            conn.sock = sock
+            conn.request('GET', path, headers={'User-Agent': 'Mozilla/5.0'})
+            raw = conn.getresponse().read().decode('gbk', errors='replace')
+        finally:
+            sock.close()
     except Exception as e:
+        print(f"[WARN] IPv4 fetch 失败: {e}", file=sys.stderr)
         return {}
 
     data = {}
@@ -134,6 +220,12 @@ def fetch_tencent(codes):
             sell_total = sum(to_int(fields[i]) for i in (20, 22, 24, 26, 28))
             waipan_ratio = round(buy_total / sell_total, 2) if sell_total > 0 else 0.0
 
+            # 五档比可靠性：任一侧挂单过少 → 比值是噪声
+            # 2026-10-26 实测 159326 卖盘仅 449 手（约 4.5 万元深度）→ 比值 16.99，
+            # 看着"买盘极强"实则是卖方无人挂单；159299 卖盘 106 手 → 6.28，同理。
+            # 门槛取 500 手（与"薄量"口径一致）：薄侧 < 500 手时比值只当情绪温度计。
+            ratio_reliable = min(buy_total, sell_total) >= 500
+
             # 竞价价 = parts[9]
             auction_px = float(fields[9]) if len(fields) > 9 and fields[9] else None
 
@@ -141,30 +233,59 @@ def fetch_tencent(codes):
                 'name': name,
                 'pre_close': pre_close,
                 'open': open_p,
+                'price': float(fields[3]) if len(fields) > 3 and fields[3] else open_p,
                 'auction_px': auction_px,
                 'chg_pct': chg_pct,
                 'vol': vol,
                 'vol_wan': round(vol / 10000, 1),
+                'amount_wan': float(fields[37]) if len(fields) > 37 and fields[37] else 0.0,
                 'buy_total': buy_total,
                 'sell_total': sell_total,
                 'waipan_ratio': waipan_ratio,
+                'ratio_reliable': ratio_reliable,
             }
         except Exception:
             continue
     return data
 
 
-def holding_signal(d, stop_loss, tp1, tp2):
+def holding_signal(d, sl, tp1, tp2, obs_on=False, exit_line=None, relief_lines=None):
     """
     持仓信号 — 更强调风险和机会
+
+    观察期（observation_mode_20261023.enabled）口径：
+    台账 stop_loss 已破但语义是「不主动减仓」，真正的红线是 exit_line。
+    exit_line 破 → 🔴（必推清仓提醒）
+    反弹到 relief_lines → 减亏离场提醒点（🟡，不是加仓信号）
     """
     chg = d['chg_pct']
     ratio = d['waipan_ratio']
     cur_open = d['open']
     pre_close = d['pre_close']
+    relief_lines = relief_lines or []
+
+    # 挂单过薄 → 五档比失真 → 视为中性 1.0，不参与信号判定
+    if not d.get('ratio_reliable', True):
+        ratio = 1.0
 
     # 竞价量过小（如 15 手）→ 五档比是空挂单噪声，不参与信号判定
     thin = d.get('vol', 0) < 500
+
+    if not cur_open:
+        return '⚠️竞价无成交'
+
+    # ── 观察期口径：先判离场线 / 减亏线 ──
+    if obs_on and exit_line:
+        exit_dist = (cur_open - exit_line) / exit_line * 100
+        if exit_dist < 0:
+            return f'🔴破离场线{exit_dist:.1f}%！需处置'
+        for rl in relief_lines:
+            if cur_open >= rl:
+                return f'🟡到减亏线{rl:.3f}（减亏离场提醒）'
+        # 未触任何线 → 按离场线距离给风险提示（阈值 3% 与摘要块保持一致）
+        if exit_dist <= 3.0:
+            return f'🟠距离场线{exit_line:.3f}仅{exit_dist:.1f}%'
+        return '⚪观察期(未触线)'
 
     # 检测是否接近止损
     near_stop = False
@@ -210,11 +331,73 @@ def holding_signal(d, stop_loss, tp1, tp2):
         return '⚪正常'
 
 
-def cand_signal(d):
-    """候选股信号 — 偏机会监控"""
+def cand_signal(d, trig=None):
+    """候选股信号 — 偏机会监控
+    trig: (kind, emax, emin, rmn, sl) —— 与 stock_monitor.py check_watched() 完全同口径：
+      reversal / new_theme : 现价 ≥ entry_max 且 五档比 ≥ ratio_min  → 建仓评估
+      pullback              : 现价 ≤ entry_max 且 五档比 ≥ ratio_min  → 建仓评估
+      已跌破自身 stop_loss 的候选 一律不推建仓信号（自相矛盾）
+      status=cleared_* 的候选建仓信号已暂停
+    """
     chg = d['chg_pct']
     ratio = d['waipan_ratio']
+    # 现价优先（开盘后 f[3]），竞价阶段 f[3] == f[5] == 匹配价，回退 f[5]
+    price = d.get('price') or d.get('open') or 0
 
+    # 挂单过薄 → 比值失真 → 视为中性 1.0
+    ratio_unreliable = not d.get('ratio_reliable', True)
+    if ratio_unreliable:
+        ratio = 1.0
+
+    if not trig or not price:
+        # 无触发区间信息 → 只做情绪判定
+        return _emotion_signal(chg, ratio)
+
+    kind, emax, emin, rmn, sl, suspended = trig
+
+    if suspended:
+        return '⏸️建仓信号已暂停'
+
+    # 坑 1（与 stock_monitor.py 2026-10-23 修复一致）：已破自身止损位不推建仓
+    if sl and price <= float(sl):
+        return f'⛔已破止损{float(sl):g}不建仓'
+
+    hit = False
+    if kind in ('reversal', 'new_theme'):
+        hit = price >= emax and ratio >= rmn
+    else:  # pullback
+        hit = price <= emax and ratio >= rmn
+
+    if hit:
+        # ⚠️ 比值不可靠时不能触发 —— 中性 1.0 会假满足 ratio_min 条件
+        if ratio_unreliable:
+            base = f'价已到位≥{emax:g}' if kind in ('reversal', 'new_theme') else f'价已回调≤{emax:g}'
+            return f'🟡{base}·五档比待确认(挂单薄)'
+        if kind == 'new_theme':
+            return f'🟢达建仓评估位≥{emax:g}(五档比{ratio:.2f})'
+        if kind == 'reversal':
+            return f'🟢反弹确认站回{emax:g}(五档比{ratio:.2f})'
+        return f'🟢回调到位≤{emax:g}(五档比{ratio:.2f})'
+
+    # 未触发 → 显示距触发位多远
+    if kind in ('reversal', 'new_theme'):
+        if price >= emax:
+            # 价格已到位，仅差五档比条件
+            return f'🟡价已到位≥{emax:g}·等五档比≥{rmn:g}(现{ratio:.2f})'
+        gap = (emax - price) / price * 100
+        if gap <= 3.0:
+            return f'🟡距触发位{emax:g}仅{gap:.1f}%'
+        return f'⚪距触发位{emax:g}差{gap:.1f}%'
+    if price <= emax:
+        return f'🟡价已回调≤{emax:g}·等五档比≥{rmn:g}(现{ratio:.2f})'
+    gap = (price - emax) / emax * 100
+    if gap <= 3.0:
+        return f'🟡距回调位{emax:g}仅{gap:.1f}%'
+    return f'⚪距回调位{emax:g}差{gap:.1f}%'
+
+
+def _emotion_signal(chg, ratio):
+    """无 entry 区间时的纯情绪判定"""
     if ratio >= 1.5 and chg >= 1.5:
         return '🟢异动拉升'
     if ratio >= 1.2 and chg >= 2.0:
@@ -230,8 +413,11 @@ def cand_signal(d):
     return '⚪正常'
 
 
-def build_report(data, holdings, candidates):
-    """生成报告（文本+Markdown混合）"""
+def build_report(data, holdings, candidates, source='实时', phase='auction'):
+    """生成报告（文本+Markdown混合）
+    phase='auction'  : 09:25 竞价窗口内 → 列名用「开盘价/竞价量」
+    phase='intraday' : 已开盘 → 持仓仍用 09:25 快照列名，候选用「现价/成交量」
+    """
     today = datetime.now().strftime('%Y-%m-%d')
     now = datetime.now().strftime('%H:%M:%S')
     lines = []
@@ -246,13 +432,13 @@ def build_report(data, holdings, candidates):
     lines.append("-" * 65)
 
     holding_rows = []
-    for mc, name, sl, tp1, tp2, note in holdings:
+    for mc, name, sl, tp1, tp2, note, obs_on, exit_line, relief_lines in holdings:
         d = data.get(mc)
         if not d:
             holding_rows.append(f"{name:<10}{mc:<12}{'--':>8}{'--':>8}{'--':>8}{'--':>6}  ⚠️数据获取失败")
             continue
 
-        sig = holding_signal(d, sl, tp1, tp2)
+        sig = holding_signal(d, sl, tp1, tp2, obs_on, exit_line, relief_lines)
         chg_str = f"{d['chg_pct']:+.2f}%"
         vol_str = f"{d['vol_wan']:.1f}万"
         ratio_str = f"{d['waipan_ratio']:.2f}"
@@ -262,8 +448,13 @@ def build_report(data, holdings, candidates):
         if d['open'] == 0:
             open_str = '0.000'
             sig = '⚠️竞价无成交'
-        elif d.get('vol', 0) < 500 and '薄' not in sig:
-            sig += '(薄量)'
+        else:
+            if not d.get('ratio_reliable', True):
+                ratio_str += '?'
+                if '薄' not in sig:
+                    sig += '(挂单薄·比值失真)'
+            elif d.get('vol', 0) < 500 and '薄' not in sig:
+                sig += '(薄量)'
 
         holding_rows.append(
             f"{name:<10}{mc:<12}{open_str:>8}{chg_str:>8}{vol_str:>8}{ratio_str:>6}  {sig}"
@@ -272,14 +463,24 @@ def build_report(data, holdings, candidates):
     lines.extend(holding_rows)
     lines.append("```")
 
-    # 持仓摘要：止损/止盈距离
+    # 持仓摘要：观察期离场线 / 减亏线（观察期优先），否则止损/止盈距离
     sl_alerts = []
     tp_alerts = []
-    for (mc, name, sl, tp1, tp2, note), row in zip(holdings, holding_rows):
+    for (mc, name, sl, tp1, tp2, note, obs_on, exit_line, relief_lines), row in zip(holdings, holding_rows):
         d = data.get(mc)
         if not d or not d.get('open'):
             continue
         cur = d['open']
+        if obs_on and exit_line:
+            dist = (cur - exit_line) / exit_line * 100
+            if dist < 0:
+                sl_alerts.append(f"  🔴 {name}: 已破观察期离场线{exit_line:.3f} {dist:.1f}% (竞价{cur:.3f})")
+            elif dist <= 3.0:
+                sl_alerts.append(f"  🟠 {name}: 距观察期离场线{exit_line:.3f}仅{dist:.1f}% (竞价{cur:.3f})")
+            for rl in relief_lines:
+                if cur >= rl:
+                    tp_alerts.append(f"  {name}: 已到减亏线{rl:.3f} (竞价{cur:.3f}) — 减亏离场提醒点,非加仓信号")
+            continue
         if sl and sl > 0:
             sl_dist = (cur - sl) / sl * 100
             if sl_dist < 0:
@@ -310,29 +511,40 @@ def build_report(data, holdings, candidates):
         lines.append("━━━ **📎 候选股** ━━━")
         lines.append("")
         lines.append("```")
-        lines.append(f"{'股票':<10}{'代码':<12}{'开盘价':>8}{'涨跌%':>8}{'竞价量':>8}{'五档比':>6}  {'信号'}")
-        lines.append("-" * 65)
+        cand_price_col = '现价' if phase == 'intraday' else '开盘价'
+        cand_vol_col = '成交量' if phase == 'intraday' else '竞价量'
+        lines.append(f"{'股票':<10}{'代码':<12}{cand_price_col:>8}{'涨跌%':>8}{cand_vol_col:>8}{'五档比':>6}{'触发区间':>16}  {'信号'}")
+        lines.append("-" * 88)
 
-        for mc, name in candidates:
+        for mc, name, trig, trig_str in candidates:
             d = data.get(mc)
             if not d:
-                lines.append(f"{name:<10}{mc:<12}{'--':>8}{'--':>8}{'--':>8}{'--':>6}  ⚠️数据获取失败")
+                lines.append(f"{name:<10}{mc:<12}{'--':>8}{'--':>8}{'--':>8}{'--':>6}{(trig_str or '--'):>16}  ⚠️数据获取失败")
                 continue
 
-            sig = cand_signal(d)
+            sig = cand_signal(d, trig)
             chg_str = f"{d['chg_pct']:+.2f}%"
             vol_str = f"{d['vol_wan']:.1f}万"
             ratio_str = f"{d['waipan_ratio']:.2f}"
             open_str = f"{d['open']:.3f}"
 
+            # 已开盘后 f[3] 才是现价（f[5] 仍是当日开盘价）
+            if phase == 'intraday' and d.get('price'):
+                open_str = f"{d['price']:.3f}"
+
             if d['open'] == 0:
                 open_str = '0.000'
                 sig = '⚠️竞价无成交'
-            elif d.get('vol', 0) < 500 and '薄' not in sig:
-                sig += '(薄量)'
+            else:
+                if not d.get('ratio_reliable', True):
+                    ratio_str += '?'
+                    if '薄' not in sig:
+                        sig += '(挂单薄·比值失真)'
+                elif d.get('vol', 0) < 500 and '薄' not in sig:
+                    sig += '(薄量)'
 
             lines.append(
-                f"{name:<10}{mc:<12}{open_str:>8}{chg_str:>8}{vol_str:>8}{ratio_str:>6}  {sig}"
+                f"{name:<10}{mc:<12}{open_str:>8}{chg_str:>8}{vol_str:>8}{ratio_str:>6}{(trig_str or '--'):>16}  {sig}"
             )
 
         lines.append("```")
@@ -344,25 +556,27 @@ def build_report(data, holdings, candidates):
     # 持仓风险汇总
     hold_danger = []
     hold_good = []
-    for mc, name, sl, tp1, tp2, note in holdings:
+    for mc, name, sl, tp1, tp2, note, obs_on, exit_line, relief_lines in holdings:
         d = data.get(mc)
         if not d:
             continue
-        sig = holding_signal(d, sl, tp1, tp2)
+        sig = holding_signal(d, sl, tp1, tp2, obs_on, exit_line, relief_lines)
         if '🔴' in sig:
             hold_danger.append(f"🔴 {name}：{sig}")
         elif '🟢' in sig:
             hold_good.append(f"🟢 {name}：{sig}")
         elif '🟠' in sig:
             hold_danger.append(f"🟠 {name}：{sig}")
+        elif '🟡' in sig:
+            hold_good.append(f"🟡 {name}：{sig}")
 
     # 候选机会汇总
     cand_ops = []
-    for mc, name in candidates:
+    for mc, name, trig, trig_str in candidates:
         d = data.get(mc)
         if not d:
             continue
-        sig = cand_signal(d)
+        sig = cand_signal(d, trig)
         if '🟢' in sig:
             cand_ops.append(f"🟢 {name}：{sig}")
         elif '🟡' in sig:
@@ -391,10 +605,40 @@ def build_report(data, holdings, candidates):
         lines.append("  （整体竞价平淡，无极端信号）")
 
     lines.append("")
-    lines.append("*竞价量单位：万手 | 五档比=买盘÷卖盘 | >1买方强 <1卖方强*")
+    lines.append(f"*竞价量单位：万手 | 五档比=买盘÷卖盘 | >1买方强 <1卖方强 | 数据源口径：{source}*")
     lines.append("*⚠️ 持仓触发 🔴/🟠 信号应优先处理*")
+    lines.append("*⚠️ 竞价快照 ≠ 触发证据：执行类动作（清仓/减仓）须用 09:30 后真实数据复核*")
 
     return '\n'.join(lines)
+
+
+def load_snapshot(date_str):
+    """载入当日已固化的竞价快照（若存在）"""
+    import json
+    try:
+        with open(SNAP_FILE, 'r') as f:
+            doc = json.load(f)
+    except Exception:
+        return {}
+    return doc.get(date_str, {}) or {}
+
+
+def save_snapshot(date_str, data):
+    """固化当日竞价快照（09:25 那一次的数据）"""
+    import json
+    try:
+        doc = {}
+        if os.path.exists(SNAP_FILE):
+            with open(SNAP_FILE, 'r') as f:
+                doc = json.load(f)
+    except Exception:
+        doc = {}
+    doc[date_str] = data
+    # 只保留最近 5 个交易日
+    keys = sorted(doc.keys())[-5:]
+    doc = {k: doc[k] for k in keys}
+    with open(SNAP_FILE, 'w') as f:
+        json.dump(doc, f, ensure_ascii=False, indent=1)
 
 
 def main():
@@ -406,9 +650,26 @@ def main():
         print("⚠️ 无持仓或候选股可监控")
         return
 
-    data = fetch_tencent(all_codes)
+    today = datetime.now().strftime('%Y-%m-%d')
+    now_hm = datetime.now().strftime('%H:%M')
+    snap = load_snapshot(today)
 
-    report = build_report(data, HOLDINGS, CANDIDATES)
+    # 始终取实时全量（候选股需要），再用 09:25 快照覆盖已有快照的标的，
+    # 保证「竞价量」对持仓保持 09:25 口径、候选用最新可用数据。
+    data = fetch_tencent(all_codes)
+    if snap:
+        for code, row in snap.items():
+            data[code] = row
+        source = '持仓=09:25竞价快照 / 候选=实时'
+    else:
+        source = '实时(09:25竞价)'
+
+    phase = 'auction' if now_hm <= '09:29' else 'intraday'
+    report = build_report(data, HOLDINGS, CANDIDATES, source, phase)
+
+    # 首次运行（09:25 竞价窗口内）固化快照
+    if not snap and phase == 'auction':
+        save_snapshot(today, data)
 
     # 写文件
     with open(OUTPUT_FILE, 'w') as f:
