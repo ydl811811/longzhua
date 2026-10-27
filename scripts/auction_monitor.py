@@ -149,15 +149,23 @@ def load_targets():
         CANDIDATES.append((f'{prefix}{code}', name, trig, trig_str))
 
     # 去重：候选不重复，且不包含已在持仓中的
+    # ⚠️ 2026-10-27 修复：同一代码可能同时出现在 portfolio.yaml（无触发区间）
+    # 和 monitor_watched.yaml（有 entry/止损/五档比门槛）。
+    # 旧逻辑「先到先得」→ portfolio.yaml 的裸条目排在前面，把带触发区间的条目挤掉
+    # （实测 512480 / 300444 触发区间显示 "--"，还漏掉了「已破止损不建仓」判定）。
+    # 修复：同一代码保留「带触发信息」的那条（trig 非 None 优先）。
     holding_codes = {h[0] for h in HOLDINGS}
-    seen = set()
-    dedup = []
+    by_code = {}
     for c in CANDIDATES:
-        if c[0] in holding_codes or c[0] in seen:
+        if c[0] in holding_codes:
             continue
-        seen.add(c[0])
-        dedup.append(c)
-    CANDIDATES = dedup
+        prev = by_code.get(c[0])
+        if prev is None:
+            by_code[c[0]] = c
+        elif (prev[2] is None) and (c[2] is not None):
+            # 新的有触发信息 → 替换旧的裸条目
+            by_code[c[0]] = c
+    CANDIDATES = list(by_code.values())
 
     return HOLDINGS, CANDIDATES
 
@@ -351,7 +359,7 @@ def cand_signal(d, trig=None):
 
     if not trig or not price:
         # 无触发区间信息 → 只做情绪判定
-        return _emotion_signal(chg, ratio)
+        return _emotion_signal(chg, ratio, ratio_unreliable)
 
     kind, emax, emin, rmn, sl, suspended = trig
 
@@ -396,8 +404,27 @@ def cand_signal(d, trig=None):
     return f'⚪距回调位{emax:g}差{gap:.1f}%'
 
 
-def _emotion_signal(chg, ratio):
-    """无 entry 区间时的纯情绪判定"""
+def _emotion_signal(chg, ratio, ratio_unreliable=False):
+    """无 entry 区间时的纯情绪判定
+
+    ⚠️ 2026-10-27 修复：挂单薄时 ratio 被置为中性 1.0，
+    旧逻辑只按 ratio 判定 → 低开 -5.33% 的万集科技(ratio 0.17)被判成「⚪正常」，
+    严重低开完全被吞掉。修复：低开/大跌优先按 chg 判定，ratio 只作增强。
+    """
+    # 严重低开（不论挂单厚薄）优先报出
+    if chg <= -5.0:
+        return '🔴大幅低开'
+    if chg <= -2.0:
+        if ratio_unreliable or ratio <= 0.5:
+            return '🔴低开异常'
+        return '🟠低开'
+    # 上涨侧（需 ratio 支持，但薄挂单时不能把 ratio=1.0 当真）
+    if ratio_unreliable:
+        if chg >= 2.0:
+            return '🟡涨幅待确认(挂单薄)'
+        if chg >= 1.0:
+            return '⚪小幅高开(挂单薄)'
+        return '⚪正常'
     if ratio >= 1.5 and chg >= 1.5:
         return '🟢异动拉升'
     if ratio >= 1.2 and chg >= 2.0:
@@ -413,13 +440,33 @@ def _emotion_signal(chg, ratio):
     return '⚪正常'
 
 
-def build_report(data, holdings, candidates, source='实时', phase='auction'):
+def _pad(s, width, align='<'):
+    """按**终端显示宽度**补空格（中文算 2 列）
+
+    2026-10-27 修复：f-string 的 :<10 是按字符数补齐，
+    中文名（2 字符宽）会把表格挤歪（实测「半导体ETF国联安」与代码列重叠）。
+    """
+    import unicodedata
+    w = sum(2 if unicodedata.east_asian_width(c) in ('W', 'F') else 1 for c in str(s))
+    fill = max(0, width - w)
+    return str(s) + ' ' * fill if align == '<' else ' ' * fill + str(s)
+
+
+def _rpad(s, width):
+    """右对齐（按显示宽度）"""
+    import unicodedata
+    w = sum(2 if unicodedata.east_asian_width(c) in ('W', 'F') else 1 for c in str(s))
+    return ' ' * max(0, width - w) + str(s)
+
+
+def build_report(data, holdings, candidates, source='实时', phase='auction', stamp=None):
     """生成报告（文本+Markdown混合）
     phase='auction'  : 09:25 竞价窗口内 → 列名用「开盘价/竞价量」
     phase='intraday' : 已开盘 → 持仓仍用 09:25 快照列名，候选用「现价/成交量」
+    stamp            : 报告时间戳（replay 时传 09:25，避免显示成重跑时刻）
     """
     today = datetime.now().strftime('%Y-%m-%d')
-    now = datetime.now().strftime('%H:%M:%S')
+    now = stamp or datetime.now().strftime('%H:%M:%S')
     lines = []
     lines.append(f"**📊 集合竞价日报 · {today} {now}**")
     lines.append("")
@@ -428,14 +475,14 @@ def build_report(data, holdings, candidates, source='实时', phase='auction'):
     lines.append("━━━ **📌 持仓股** ━━━")
     lines.append("")
     lines.append("```")
-    lines.append(f"{'股票':<10}{'代码':<12}{'开盘价':>8}{'涨跌%':>8}{'竞价量':>8}{'五档比':>6}  {'信号'}")
-    lines.append("-" * 65)
+    lines.append(f"{_pad('股票', 20)}{_pad('代码', 12)}{_rpad('开盘价', 8)}{_rpad('涨跌%', 9)}{_rpad('竞价量', 10)}{_rpad('五档比', 8)}  信号")
+    lines.append("-" * 75)
 
     holding_rows = []
     for mc, name, sl, tp1, tp2, note, obs_on, exit_line, relief_lines in holdings:
         d = data.get(mc)
         if not d:
-            holding_rows.append(f"{name:<10}{mc:<12}{'--':>8}{'--':>8}{'--':>8}{'--':>6}  ⚠️数据获取失败")
+            holding_rows.append(f"{_pad(name, 20)}{_pad(mc, 12)}{_rpad('--', 8)}{_rpad('--', 9)}{_rpad('--', 10)}{_rpad('--', 8)}  ⚠️数据获取失败")
             continue
 
         sig = holding_signal(d, sl, tp1, tp2, obs_on, exit_line, relief_lines)
@@ -457,7 +504,7 @@ def build_report(data, holdings, candidates, source='实时', phase='auction'):
                 sig += '(薄量)'
 
         holding_rows.append(
-            f"{name:<10}{mc:<12}{open_str:>8}{chg_str:>8}{vol_str:>8}{ratio_str:>6}  {sig}"
+            f"{_pad(name, 20)}{_pad(mc, 12)}{_rpad(open_str, 8)}{_rpad(chg_str, 9)}{_rpad(vol_str, 10)}{_rpad(ratio_str, 8)}  {sig}"
         )
 
     lines.extend(holding_rows)
@@ -513,13 +560,13 @@ def build_report(data, holdings, candidates, source='实时', phase='auction'):
         lines.append("```")
         cand_price_col = '现价' if phase == 'intraday' else '开盘价'
         cand_vol_col = '成交量' if phase == 'intraday' else '竞价量'
-        lines.append(f"{'股票':<10}{'代码':<12}{cand_price_col:>8}{'涨跌%':>8}{cand_vol_col:>8}{'五档比':>6}{'触发区间':>16}  {'信号'}")
-        lines.append("-" * 88)
+        lines.append(f"{_pad('股票', 20)}{_pad('代码', 12)}{_rpad(cand_price_col, 8)}{_rpad('涨跌%', 9)}{_rpad(cand_vol_col, 10)}{_rpad('五档比', 8)}{_rpad('触发区间', 16)}  信号")
+        lines.append("-" * 98)
 
         for mc, name, trig, trig_str in candidates:
             d = data.get(mc)
             if not d:
-                lines.append(f"{name:<10}{mc:<12}{'--':>8}{'--':>8}{'--':>8}{'--':>6}{(trig_str or '--'):>16}  ⚠️数据获取失败")
+                lines.append(f"{_pad(name, 20)}{_pad(mc, 12)}{_rpad('--', 8)}{_rpad('--', 9)}{_rpad('--', 10)}{_rpad('--', 8)}{_rpad(trig_str or '--', 16)}  ⚠️数据获取失败")
                 continue
 
             sig = cand_signal(d, trig)
@@ -544,7 +591,7 @@ def build_report(data, holdings, candidates, source='实时', phase='auction'):
                     sig += '(薄量)'
 
             lines.append(
-                f"{name:<10}{mc:<12}{open_str:>8}{chg_str:>8}{vol_str:>8}{ratio_str:>6}{(trig_str or '--'):>16}  {sig}"
+                f"{_pad(name, 20)}{_pad(mc, 12)}{_rpad(open_str, 8)}{_rpad(chg_str, 9)}{_rpad(vol_str, 10)}{_rpad(ratio_str, 8)}{_rpad(trig_str or '--', 16)}  {sig}"
             )
 
         lines.append("```")
@@ -654,21 +701,40 @@ def main():
     now_hm = datetime.now().strftime('%H:%M')
     snap = load_snapshot(today)
 
-    # 始终取实时全量（候选股需要），再用 09:25 快照覆盖已有快照的标的，
-    # 保证「竞价量」对持仓保持 09:25 口径、候选用最新可用数据。
-    data = fetch_tencent(all_codes)
-    if snap:
-        for code, row in snap.items():
-            data[code] = row
-        source = '持仓=09:25竞价快照 / 候选=实时'
+    # ── replay 模式：用当日已固化的 09:25 快照重建竞价报告 ──
+    # 用途：修完信号逻辑后重发一份**口径纯正**的竞价报告（不开盘后实时数据混入）。
+    # 不带 --replay 时的正常行为不变。
+    replay = '--replay' in sys.argv
+    if replay:
+        if not snap:
+            print(f"⚠️ {today} 无竞价快照，无法 replay")
+            return
+        data = snap
+        source = '09:25竞价快照(replay)'
+        phase = 'auction'
     else:
-        source = '实时(09:25竞价)'
+        # 始终取实时全量（候选股需要），再用 09:25 快照覆盖已有快照的标的，
+        # 保证「竞价量」对持仓保持 09:25 口径、候选用最新可用数据。
+        data = fetch_tencent(all_codes)
+        if snap:
+            # ⚠️ 2026-10-27 修复：快照里存的是「全量代码」，旧代码把快照回灌到全部标的，
+            # 实际覆盖了候选股 → 但脚注却写「候选=实时」，口径不符。
+            # 修复：只用快照覆盖**持仓**，候选一律用实时数据。
+            hold_codes = {h[0] for h in HOLDINGS}
+            for code, row in snap.items():
+                if code in hold_codes:
+                    data[code] = row
+            source = '持仓=09:25竞价快照 / 候选=实时'
+        else:
+            source = '实时(09:25竞价)'
 
-    phase = 'auction' if now_hm <= '09:29' else 'intraday'
-    report = build_report(data, HOLDINGS, CANDIDATES, source, phase)
+        phase = 'auction' if now_hm <= '09:29' else 'intraday'
+
+    report = build_report(data, HOLDINGS, CANDIDATES, source, phase,
+                          stamp='09:25:00' if replay else None)
 
     # 首次运行（09:25 竞价窗口内）固化快照
-    if not snap and phase == 'auction':
+    if not snap and phase == 'auction' and not replay:
         save_snapshot(today, data)
 
     # 写文件
