@@ -309,6 +309,24 @@ def check_portfolio_consistency():
     return warnings
 
 
+def tencent_kline(code, n=6):
+    """腾讯前复权日 K 线 → rows[[date,open,close,high,low,vol], ...]
+
+    唯一可信的「昨收 / 昨日涨跌」来源。盘前腾讯实时报价会把 price/prev
+    同时滚成上一交易日收盘 → 涨跌算成 0.00%（2026-10-27 实测）。
+    """
+    url = ('https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?'
+           'param=%s,day,,,%d,qfq' % (code, n))
+    try:
+        d = json.loads(fetch(url, enc='utf-8'))
+        node = d['data'][code]
+        rows = node.get('qfqday') or node.get('day')
+        return rows or []
+    except Exception as e:
+        print(f"  ⚠️ K线获取失败 {code}: {e}")
+        return []
+
+
 def get_portfolio_quotes():
     """从 monitor_positions.yaml 单源读取真实持仓，获取行情
 
@@ -317,6 +335,9 @@ def get_portfolio_quotes():
       4 只已清仓僵尸 + 漏掉 3 只真实持仓
     - 2026-07-24：废弃 positions_active.yaml 双源对比，统一单源读 monitor_positions.yaml，
       按 status=holding + shares>0 过滤
+    - 2026-10-27：盘前（集合竞价前）腾讯实时报价不可信 —— price/prev 被滚成昨收、
+      open=0 且 ts 已是今天 → 会把「昨日涨跌」污染成 0.00%。
+      昨收/昨涨跌一律走腾讯 K 线；实时价只作「此刻盘口」参考。
     """
     if not MONITOR_POSITIONS_FILE.exists():
         print(f"  ⚠️ 台账文件不存在: {MONITOR_POSITIONS_FILE}")
@@ -335,6 +356,7 @@ def get_portfolio_quotes():
                     'market': p.get('market', 'sh'),
                     'name': p.get('name', ''),
                     'shares': shares,
+                    'cost': float(p.get('cost') or 0) or None,
                 }
 
     if not pos_map:
@@ -344,15 +366,17 @@ def get_portfolio_quotes():
     codes = []
     names = {}
     shares_map = {}
+    cost_map = {}
     for code, info in pos_map.items():
         full_code = f"{info['market']}{code}"
         codes.append(full_code)
         names[full_code] = info['name']
         shares_map[full_code] = info['shares']
+        cost_map[full_code] = info.get('cost')
 
     print(f"  ✅ 从 monitor_positions.yaml 单源读到 {len(codes)} 只持仓: {codes}")
 
-    # 获取行情
+    # 获取行情：实时盘口（腾讯）+ 昨收/昨涨跌（腾讯 K 线，唯一可信）
     quotes = []
     try:
         raw = fetch(f"https://qt.gtimg.cn/q={','.join(codes)}")
@@ -366,23 +390,52 @@ def get_portfolio_quotes():
                 continue
             try:
                 price = float(parts[3])
-                prev = float(parts[4])
-                chg = (price / prev - 1) * 100 if prev else 0
-                # 开盘前腾讯会把日涨跌字段清零(price==prev, open==0) -> 显示 +0.00% 是假象,
-                # 且会污染 calculate_verdict 的持仓均值。标记 pre_open 并排除出打分。
-                pre_open = (float(parts[5] or 0) == 0)
-                name = names.get(code_raw, parts[1])
-                quotes.append({
-                    'code': code_raw,
-                    'name': name,
-                    'price': price,
-                    'prev': prev,
-                    'chg': chg,
-                    'pre_open': pre_open,
-                    'shares': shares_map.get(code_raw, 0),
-                })
-            except:
+                prev_rt = float(parts[4])
+            except Exception:
                 continue
+            name = names.get(code_raw, parts[1])
+
+            # 昨收 / 昨日涨跌：一律走 K 线（盘前实时报价不可信）
+            k_rows = tencent_kline(code_raw, 30)
+            chg = None
+            prev_close = None
+            last_close = None
+            kdate = ''
+            ma5 = None
+            if len(k_rows) >= 2:
+                kdate = k_rows[-1][0]
+                last_close = float(k_rows[-1][2])
+                prev_close = float(k_rows[-2][2])
+                if prev_close:
+                    chg = (last_close / prev_close - 1) * 100
+            if len(k_rows) >= 5:
+                closes = [float(r[2]) for r in k_rows[-5:]]
+                ma5 = sum(closes) / 5
+            if chg is None:
+                # K 线兜底失败 → 用实时价算，并标记 pre_open 排除出打分
+                prev = prev_rt
+                chg = (price / prev - 1) * 100 if prev else 0.0
+                pre_open = True
+            else:
+                # 昨涨跌来自 K 线 → 本身就是「昨日」口径，不是盘前污染值
+                pre_open = False
+
+            cost = cost_map.get(code_raw)
+            pnl_pct = ((last_close / cost - 1) * 100) if (cost and last_close) else None
+
+            quotes.append({
+                'code': code_raw,
+                'name': name,
+                'price': last_close if last_close is not None else price,
+                'prev': prev_close if prev_close is not None else prev_rt,
+                'chg': chg,
+                'pre_open': pre_open,
+                'kdate': kdate,
+                'ma5': ma5,
+                'cost': cost,
+                'pnl_pct': pnl_pct,
+                'shares': shares_map.get(code_raw, 0),
+            })
     except Exception as e:
         print(f"  行情获取失败: {e}")
 
@@ -441,6 +494,10 @@ def get_sector_indices():
 
     返回：费城半导体 SOX / 费半ETF SOXX / 罗素2000 IWM / 恒生 / 恒生科技
     腾讯与新浪双源，方向不一致时标记 conflict（不静默取一个）
+
+    ⚠️ 2026-10-27 09:22 实测：港股开盘前腾讯把 price/prev 同时滚成昨收
+    → 恒生/恒生科技显示 0.00%（真实 +0.51% / -0.36%）。
+    港股指数的「昨收/昨涨跌」改走腾讯 K 线，与 A 股同构。
     """
     result = {}
     # 腾讯侧
@@ -467,6 +524,19 @@ def get_sector_indices():
                                 'ts': ts, 'src': '腾讯'}
     except Exception as e:
         print(f"  ⚠️ 腾讯板块指数失败: {e}")
+
+    # 港股指数：昨收/昨涨跌走 K 线（盘前实时报价会被滚成 0.00%）
+    for code, label in (('hkHSI', '恒生指数'), ('hkHSTECH', '恒生科技')):
+        k_rows = tencent_kline(code, 4)
+        if len(k_rows) >= 2:
+            try:
+                last_c = float(k_rows[-1][2]); prev_c = float(k_rows[-2][2])
+                if prev_c:
+                    result[label] = {'price': last_c, 'prev': prev_c,
+                                     'chg': (last_c / prev_c - 1) * 100,
+                                     'ts': k_rows[-1][0], 'src': '腾讯K线'}
+            except (TypeError, ValueError):
+                pass
 
     # 新浪侧补 SOX 本体（腾讯无对应代码）
     sina = get_sina_quotes(['gb_$sox'])
@@ -538,32 +608,123 @@ def get_china_adr():
     return out
 
 
-def get_turnover():
-    """两市成交额（东财 push2his kline，上证+深证相加）
+def get_turnover(trading_day=None):
+    """两市成交额（打分用：>1.2万亿 +1 / <8000亿 -1）
 
-    2026-10-26 实测：上证 8986.7 亿 + 深证 10576.2 亿 = 1.96 万亿
+    ⚠️ 2026-10-27 09:21 实测踩坑：腾讯 parts[37] 成交额字段在**盘前会被清零**
+    （09:00 跑到 1.61 万亿，09:21 同一字段变 0）—— 旧实现主源静默返回 0.0，
+    报告里成交额整行消失，打分项被跳过（P0-6 silent fail）。
+
+    修法：主源改**交易所官方端点**（SSE + SZSE），腾讯/东财降为备源；
+    且任何源返回 0 一律视为「未取到」而非「成交额为零」。
+
+    沪市 = SSE(PRODUCT_CODE 01 股票 + 03 基金)；深市 = SZSE「股票成交金额（亿元）」
+    ⚠️ SZSE 的 txtDate 参数被服务端忽略 → 永远返回最新交易日，判断日期读 metadata.subname
     """
     total = 0.0
     detail = {}
-    for secid, name in [('1.000001', '上证'), ('0.399001', '深证')]:
-        u = ('https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=' + secid +
-             '&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57'
-             '&klt=101&fqt=0&end=20500101&lmt=3')
-        try:
-            raw = fetch(u, headers={'User-Agent': 'Mozilla/5.0',
-                                    'Referer': 'https://quote.eastmoney.com/'},
-                        enc='utf-8')
-            d = json.loads(raw)
-            klines = (d.get('data') or {}).get('klines') or []
-            if not klines:
+
+    # ---- 主源：交易所官方端点 ----
+    sse_amt = None
+    szse_amt = None
+    sse_date = ''
+    szse_date = ''
+    try:
+        u = ('https://query.sse.com.cn/commonQuery.do?sqlId=COMMON_SSE_SJ_GPSJ_CJGK_MRGK_C'
+             '&PRODUCT_CODE=01,02,03,04,05,06&type=inParams&SEARCH_DATE=' + (trading_day or '') +
+             '&_=1')
+        raw = fetch(u, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                                         'AppleWebKit/537.36 Chrome/120 Safari/537.36',
+                                'Referer': 'https://www.sse.com.cn/'}, enc='utf-8')
+        d = json.loads(raw)
+        amts = {}
+        for it in (d.get('result') or []):
+            try:
+                amts[it.get('PRODUCT_CODE')] = float(it.get('TRADE_AMT') or 0)
+            except (TypeError, ValueError):
                 continue
-            last = klines[-1].split(',')
-            amt = float(last[6]) / 1e8  # 元 -> 亿
-            detail[name] = {'date': last[0], 'amount_yi': amt}
-            total += amt
-        except Exception as e:
-            print(f"  ⚠️ {name}成交额失败: {e}")
-    return {'total_yi': total, 'detail': detail}
+            sse_date = it.get('TRADE_DATE') or sse_date
+        # 沪市成交额 = 股票(01) + 基金(03)
+        sse_amt = amts.get('01', 0) + amts.get('03', 0)
+        if sse_amt > 0:
+            detail['上证'] = {'date': sse_date, 'amount_yi': sse_amt}
+            total += sse_amt
+    except Exception as e:
+        print(f"  ⚠️ SSE 成交额失败: {e}")
+
+    try:
+        u = ('https://www.szse.cn/api/report/ShowReport/data?SHOWTYPE=JSON&CATALOGID=1803'
+             '&TABKEY=tab1&random=0.7')
+        raw = fetch(u, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                                         'AppleWebKit/537.36 Chrome/120 Safari/537.36',
+                                'Referer': 'https://www.szse.cn/market/overview/index.html'},
+                    enc='utf-8')
+        d = json.loads(raw)
+        for tab in d:
+            md = tab.get('metadata') or {}
+            for row in (tab.get('data') or []):
+                if '成交金额' in str(row.get('zbmc', '')):
+                    szse_amt = float(str(row.get('brsz', '0')).replace(',', ''))
+                    szse_date = md.get('subname') or ''
+        if szse_amt:
+            detail['深证'] = {'date': szse_date, 'amount_yi': szse_amt}
+            total += szse_amt
+    except Exception as e:
+        print(f"  ⚠️ SZSE 成交额失败: {e}")
+
+    if total > 0:
+        return {'total_yi': total, 'detail': detail, 'status': 'ok',
+                'src': 'SSE+SZSE官方'}
+
+    # ---- 备源1：腾讯指数快照（成交额在 parts[37]，单位万元）----
+    try:
+        raw = fetch('https://qt.gtimg.cn/q=sh000001,sz399001')
+        t_total = 0.0
+        t_detail = {}
+        for line in raw.strip().split('\n'):
+            m = re.search(r'v_(\w+)=', line)
+            if not m:
+                continue
+            parts = line.split('=')[1].strip('"').split('~')
+            if len(parts) < 38:
+                continue
+            name = '上证' if m.group(1) == 'sh000001' else '深证'
+            try:
+                amt = float(parts[37]) / 10000.0  # 万元 -> 亿
+            except (TypeError, ValueError):
+                continue
+            if amt <= 0:      # 盘前该字段会被清零 → 视为未取到
+                continue
+            t_detail[name] = {'date': parts[30][:8], 'amount_yi': amt}
+            t_total += amt
+        if t_total > 0:
+            return {'total_yi': t_total, 'detail': t_detail, 'status': 'ok', 'src': '腾讯'}
+    except Exception as e:
+        print(f"  ⚠️ 腾讯成交额失败: {e}")
+
+    # ---- 备源2：东财 push2 ulist（f6 = 成交额，元）----
+    try:
+        u = ('https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2'
+             '&secids=1.000001,0.399001&fields=f2,f3,f6,f12,f14')
+        raw = fetch(u, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                                         'AppleWebKit/537.36 Chrome/120 Safari/537.36',
+                                'Referer': 'https://quote.eastmoney.com/'}, enc='utf-8')
+        d = json.loads(raw)
+        e_total = 0.0
+        e_detail = {}
+        for it in ((d.get('data') or {}).get('diff') or []):
+            name = '上证' if str(it.get('f12')) == '000001' else '深证'
+            amt = float(it.get('f6') or 0) / 1e8  # 元 -> 亿
+            if amt <= 0:
+                continue
+            e_detail[name] = {'date': '', 'amount_yi': amt}
+            e_total += amt
+        if e_total > 0:
+            return {'total_yi': e_total, 'detail': e_detail, 'status': 'ok', 'src': '东财'}
+    except Exception as e:
+        print(f"  ⚠️ 东财成交额兜底失败: {e}")
+
+    return {'total_yi': 0.0, 'detail': {}, 'status': 'unavailable'}
 
 
 def get_margin_balance():
@@ -604,30 +765,59 @@ def get_margin_balance():
 
 
 def get_a_index_snapshot():
-    """A股指数快照（含上证50 vs 创业板指的风格分化对比）"""
+    """A股指数快照（含上证50 vs 创业板指的风格分化对比）
+
+    2026-10-27 08:00 实测：盘前腾讯会把 price 与 prev 同时滚到昨收
+    → 涨跌算成 0.00%（旧实现只在盘后复核时看不出来）。改主源 = 新浪日K，
+    取最后一根【已收】日线（date < 今天），session 状态无关；
+    腾讯实时为备源（仅当日内运行时才有意义）。
+    """
     idx = [('sh000001', '上证指数'), ('sh000300', '沪深300'), ('sh000016', '上证50'),
            ('sz399001', '深成指'), ('sz399006', '创业板指'), ('sh000688', '科创50'),
            ('sh000905', '中证500')]
     out = {}
-    try:
-        raw = fetch('https://qt.gtimg.cn/q=' + ','.join(c for c, _ in idx))
-    except Exception as e:
-        print(f"  ⚠️ A股指数失败: {e}")
-        return out
-    for line in raw.strip().split('\n'):
-        m = re.search(r'v_(\w+)=', line)
-        if not m:
-            continue
-        parts = line.split('=')[1].strip('";').split('~')
-        if len(parts) < 33:
-            continue
+    today = datetime.now().strftime('%Y-%m-%d')
+    # 主源：新浪日K（最后一根已收日线）
+    for code, label in idx:
         try:
-            price = float(parts[3]); prev = float(parts[4])
-        except (ValueError, IndexError):
-            continue
-        out[m.group(1)] = {'price': price, 'prev': prev,
-                           'chg': (price / prev - 1) * 100 if prev else 0,
-                           'ts': parts[30] if len(parts) > 30 else ''}
+            url = ('https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/'
+                   'CN_MarketData.getKLineData')
+            req = urllib.request.Request(
+                url, data=('symbol=%s&scale=240&ma=no&datalen=5' % code).encode(),
+                headers={'User-Agent': 'Mozilla/5.0'})
+            kl = json.loads(urllib.request.urlopen(req, timeout=10).read())
+            done = [x for x in kl if str(x.get('day', ''))[:10] < today]
+            if len(done) < 2:
+                continue
+            prev_c = float(done[-2]['close']); last_c = float(done[-1]['close'])
+            out[code] = {'price': last_c, 'prev': prev_c,
+                         'chg': (last_c / prev_c - 1) * 100 if prev_c else 0,
+                         'ts': str(done[-1].get('day', '')),
+                         'label': label, 'src': 'sina_kline'}
+        except Exception as e:
+            print(f"  ⚠️ {label}新浪日K失败: {e}")
+    # 备源：腾讯实时（新浪全挂时才用）
+    if not out:
+        try:
+            raw = fetch('https://qt.gtimg.cn/q=' + ','.join(c for c, _ in idx))
+        except Exception as e:
+            print(f"  ⚠️ A股指数腾讯兜底失败: {e}")
+            return out
+        for line in raw.strip().split('\n'):
+            m = re.search(r'v_(\w+)=', line)
+            if not m:
+                continue
+            parts = line.split('=')[1].strip('";').split('~')
+            if len(parts) < 33:
+                continue
+            try:
+                price = float(parts[3]); prev = float(parts[4])
+            except (ValueError, IndexError):
+                continue
+            out[m.group(1)] = {'price': price, 'prev': prev,
+                               'chg': (price / prev - 1) * 100 if prev else 0,
+                               'ts': parts[30] if len(parts) > 30 else '',
+                               'src': 'gtimg'}
     return out
 
 
@@ -635,18 +825,37 @@ def get_limit_structure(date_compact):
     """涨停/连板结构（判断主线是否成型）
 
     2026-10-26 实测：82 涨停但 70 家首板 → 主线未成型
+
+    ⚠️ push2ex 偶发 403/空响应（2026-10-27 09:00 实测失败，agent 层同参数带
+    Referer + 完整浏览器 UA 重试成功）→ 必须重试 + 完整 UA + 校验首字符是 '{'
     """
     u = ('https://push2ex.eastmoney.com/getTopicZTPool?ut=7eea3edcaed734bea9cbfc24409ed989'
          '&dpt=wz.ztzt&Pageindex=0&pagesize=400&sort=fbt%3Aasc&date=' + date_compact +
          '&fields=c,n,p,zdp,lbc,hybk,zbc')
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                             '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+               'Referer': 'https://quote.eastmoney.com/',
+               'Accept': '*/*'}
+    raw = None
+    last_err = None
+    for attempt in range(4):
+        try:
+            raw = fetch(u, headers=headers, enc='utf-8')
+            if raw.strip().startswith('{'):
+                break
+            last_err = 'non-json response'
+            raw = None
+        except Exception as e:
+            last_err = repr(e)
+        time.sleep(2)
+    if raw is None:
+        print(f"  ⚠️ 涨停池失败: {last_err}")
+        return None
     try:
-        raw = fetch(u, headers={'User-Agent': 'Mozilla/5.0',
-                                'Referer': 'https://quote.eastmoney.com/'},
-                    enc='utf-8')
         d = json.loads(raw)
         pool = (d.get('data') or {}).get('pool') or []
     except Exception as e:
-        print(f"  ⚠️ 涨停池失败: {e}")
+        print(f"  ⚠️ 涨停池解析失败: {e}")
         return None
     if not pool:
         return None
@@ -790,14 +999,20 @@ def generate_report():
 
     # 1c. 两市成交额 + 融资余额（新增）
     print("\n💰 获取成交额/融资余额...")
-    turnover = get_turnover()
+    turnover = get_turnover(trading_day=None)
     margin = get_margin_balance()
 
     # 1d. A股指数快照 + 涨停结构（新增）
     print("\n📊 获取A股指数/涨停结构...")
     a_index = get_a_index_snapshot()
-    ymd = (datetime.now() - __import__('datetime').timedelta(days=1))
-    limit_struct = get_limit_structure(ymd.strftime('%Y%m%d'))
+    # 涨停池日期必须来自「最近交易日」，不能用 now()-1day
+    # （周一跑会取到周日 → 涨停池空 → "主线未成型"结论失真）
+    k_rows = tencent_kline('sh000001', 4)
+    if len(k_rows) >= 1:
+        last_trading_day = k_rows[-1][0]
+    else:
+        last_trading_day = (datetime.now() - __import__('datetime').timedelta(days=1)).strftime('%Y-%m-%d')
+    limit_struct = get_limit_structure(last_trading_day.replace('-', ''))
 
     # 2. 持仓行情
     print("\n💼 获取持仓行情...")
@@ -866,7 +1081,9 @@ def generate_report():
     if turnover and turnover.get('total_yi'):
         lines.append("")
         parts = " + ".join(f"{n} {v['amount_yi']:.0f}亿" for n, v in turnover['detail'].items())
-        lines.append(f"**两市成交额**：{parts} = **{turnover['total_yi']/10000:.2f}万亿**")
+        src = turnover.get('src', '')
+        lines.append(f"**两市成交额**：{parts} = **{turnover['total_yi']/10000:.2f}万亿**"
+                     + (f"（{src}）" if src else ""))
     if margin:
         lines.append(f"**融资余额**：{margin['latest']['balance_yi']:.0f}亿 "
                      f"(单日 {margin['chg_yi']:+.0f}亿, 5日累计 {margin['cum5_yi']:+.0f}亿)")
@@ -905,14 +1122,19 @@ def generate_report():
     lines.append("")
     all_pre = quotes and all(q.get('pre_open') for q in quotes)
     if all_pre:
-        lines.append("## 四、持仓标的（开盘前快照，涨跌幅未生成）")
+        lines.append("## 四、持仓标的（昨结算参考）")
     else:
         lines.append("## 四、持仓标的（昨结算参考）")
     if quotes:
         for q in quotes:
             chg_str = f"{q['chg']:+.2f}%" if not q.get('pre_open') else "（待开盘）"
             shares_str = f" ({q['shares']:,}份)" if q.get('shares', 0) > 0 else ""
-            lines.append(f"- {q['name']}: {q['price']:.3f} {chg_str}{shares_str}")
+            extra = ""
+            if q.get('pnl_pct') is not None:
+                extra += f" 浮亏{q['pnl_pct']:+.2f}%"
+            if q.get('ma5'):
+                extra += f" 距MA5 {(q['price']/q['ma5']-1)*100:+.2f}%"
+            lines.append(f"- {q['name']}: {q['price']:.3f} {chg_str}{shares_str}{extra}")
     else:
         lines.append("暂无持仓")
     
