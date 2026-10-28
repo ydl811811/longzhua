@@ -80,11 +80,48 @@ def _session(key_name=None):
     s = requests.Session()
     s.headers.update({"X-API-Key": api_key})
     s.trust_env = False  # 避免环境变量代理污染
-    if 'proxy' in creds:
+    # 2026-10-28 修复：卖家代理 36.139.237.19:2018 已失效（ProxyError 407），
+    # 直连可用。保留 creds['proxy'] 作为首选，但代理失败时自动回退直连。
+    # 注意 proxies 必须用 None 而不是 ""（空串仍会被 urllib3 当作代理去连）。
+    s.proxies = {"http": None, "https": None}
+    if 'proxy' in creds and creds.get('proxy'):
         s.proxies = creds['proxy']
-    else:
-        s.proxies = {"http": "", "https": ""}
     return s, creds
+
+
+def _get_with_route_failover(url, params, timeout, s, direct_retries=3):
+    """2026-10-28 新增：代理 → 直连 自动回退 + 直连重试。
+
+    卖家代理 (36.139.237.19:2018) 已在 2026-10-28 实测失效 (ProxyError 407)，
+    但直连 ai-tool.indevs.in 可用（偶发 ReadTimeout 需重试）。
+    策略 = 先按 session 里的代理试一次；ProxyError/ConnectError 就用
+    proxies=None 重连，最多 direct_retries 次（每次全新 session + 短超时）。
+    """
+    def _direct(attempts):
+        last = None
+        for i in range(attempts):
+            s2 = requests.Session()
+            s2.headers.update(s.headers)
+            s2.trust_env = False
+            s2.proxies = {"http": None, "https": None}
+            try:
+                return s2.get(url, params=params or {}, timeout=timeout), None
+            except Exception as e:
+                last = e
+                time.sleep(1.5 * (i + 1))
+        raise last if last else RuntimeError('direct retry failed')
+
+    try:
+        r = s.get(url, params=params or {}, timeout=timeout)
+        return r, None
+    except Exception as e:
+        err = e
+        name = type(e).__name__
+        if 'Proxy' not in name and 'Connect' not in name:
+            raise
+        # 回退：强制直连（带重试）
+        r2, _ = _direct(direct_retries)
+        return r2, err
 
 
 def call_with_failover(api, params=None, timeout=30):
@@ -105,7 +142,9 @@ def call_with_failover(api, params=None, timeout=30):
         base = creds['super_api_base']
         url = f"{base}{creds['super_api_path_prefix']}/{api}"
         try:
-            r = s.get(url, params=params or {}, timeout=timeout)
+            r, route_err = _get_with_route_failover(url, params, timeout, s)
+            if route_err is not None:
+                print(f"  [tushare] 代理不可用已回退直连: {type(route_err).__name__}")
             if r.status_code == 200:
                 d = r.json()
                 # 检测 key 失效（403 invalid_api_key）
@@ -131,7 +170,9 @@ def call(path: str, params: Optional[dict] = None, timeout: int = 30) -> dict:
     base = creds['super_api_base']
     url = f"{base}{creds['super_api_path_prefix']}/{path}"
     try:
-        r = s.get(url, params=params or {}, timeout=timeout)
+        r, route_err = _get_with_route_failover(url, params, timeout, s)
+        if route_err is not None:
+            print(f"  [tushare] 代理不可用已回退直连: {type(route_err).__name__}")
         if r.status_code != 200:
             return {"code": r.status_code, "msg": f"HTTP {r.status_code}", "raw": r.text[:200]}
         return r.json()
