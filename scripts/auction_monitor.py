@@ -23,6 +23,9 @@ OUTPUT_FILE = '/home/yu/.hermes/cron/output/auction_monitor.txt'
 # 竞价快照缓存（按交易日）：09:25 跑完固化，之后重跑仍显示 09:25 竞价数据，
 # 避免开盘后「竞价量」变成累计成交量导致口径漂移。
 SNAP_FILE = '/home/yu/.hermes/stock-portfolio/.auction_snapshot.json'
+# 昨晚策略文档目录（承接待办的来源）
+STRATEGY_DIR = '/home/yu/.hermes/cron/output'
+STRATEGY_PREFIX = 'eod_strategy_'
 # ===================== 配置 =====================
 
 import yaml
@@ -440,6 +443,242 @@ def _emotion_signal(chg, ratio, ratio_unreliable=False):
     return '⚪正常'
 
 
+def load_pending_actions(today_str, holdings, data):
+    """解析最近一份 eod_strategy_*.md → 今日待执行的持仓动作 + 竞价条件核对。
+
+    ⚠️ 2026-10-28 新增：竞价报告此前**完全不承接**昨晚策略的待办动作，
+    导致「513050 ≤0.930 清 7,000 份」这类今日执行项只存在于晚报文件里，
+    老大在 09:25 看不到 → 本函数把动作拉进竞价报告并标注条件状态。
+
+    纪律（SKILL.md「竞价快照 ≠ 触发证据」）：
+    价格条件可由竞价验证；时间条件（5 分钟不反弹）/ 五档比条件**不可**，
+    一律写「价格条件已满足 · 时间/挂单条件待 09:30 后确认」，**不得写「触发」**。
+    """
+    import glob
+    import re
+
+    files = sorted(glob.glob(os.path.join(STRATEGY_DIR, STRATEGY_PREFIX + '*.md')))
+    # 排除今天的文件（今天 21:00 的晚报是给明天的）
+    # ⚠️ 文件名日期是 20261027（无分隔符），today_str 是 2026-10-28 → 必须先归一化再比
+    def _fname_date(p):
+        raw = os.path.basename(p)[len(STRATEGY_PREFIX):-3]
+        if len(raw) == 8 and raw.isdigit():
+            return f'{raw[:4]}-{raw[4:6]}-{raw[6:]}'
+        return raw
+    files = [f for f in files if _fname_date(f) < today_str]
+    if not files:
+        return [], None
+    path = files[-1]
+    try:
+        with open(path, encoding='utf-8') as f:
+            text = f.read()
+    except Exception:
+        return [], None
+
+    # 目标日声明校验（P0-54）：文内声明的目标日必须等于今天，否则不承接
+    # 支持两种写法：「策略针对 **10/28（星期三）**」与「策略针对 10/28」
+    tm = re.match(r'(\d{4})-(\d{2})-(\d{2})', today_str)
+    if tm:
+        want = (tm.group(2), tm.group(3))
+        declared = None
+        for dm in re.finditer(r'策略针对[^\n]*?(\d{1,2})\s*[/月]\s*(\d{1,2})\s*日?', text):
+            declared = (f'{int(dm.group(1)):02d}', f'{int(dm.group(2)):02d}')
+            break
+        if declared and declared != want:
+            return [], None
+
+    # 定位「操作策略」段
+    sec = ''
+    for mm in re.finditer(r'##\s*[^\n]*操作策略[^\n]*\n(.*?)(?=\n##\s|\Z)', text, re.S):
+        sec = mm.group(1)
+        break
+    if not sec:
+        return [], None
+
+    # 代码 → 带市场前缀（从持仓表反查；非持仓代码不在持仓表里 → 跳过）
+    code_map = {}
+    for mc, name, *_ in holdings:
+        code_map[mc[2:]] = (mc, name)
+
+    actions = []
+    notes = []
+    for line in sec.splitlines():
+        line = line.strip()
+        if not line.startswith('|'):
+            continue
+        cells = [c.strip() for c in line.strip('|').split('|')]
+        if len(cells) < 4:
+            continue
+        if cells[0].startswith('---') or cells[0].startswith(':'):
+            continue
+        if cells[0] == '时点':
+            continue
+        when, tgt, act, cond = cells[0], cells[1], cells[2], cells[3]
+        risk = cells[4] if len(cells) > 4 else ''
+
+        cm = re.search(r'(\d{6})', tgt)
+        if not cm:
+            # 非持仓行（如「候选池 一律不建仓」）→ 记为备注行
+            if '候选' in tgt:
+                notes.append({'when': when, 'target': tgt, 'action': act, 'cond': cond})
+            continue
+        raw_code = cm.group(1)
+        if raw_code not in code_map:
+            continue
+        mc, name = code_map[raw_code]
+
+        # 触发条件里的主价位 + 方向（只认全角 ≤ ≥，避免匹配 "0.96 < 1.0" 这类）
+        thr = None
+        cmp = None
+        tm2 = re.search(r'(≤|≥)\s*(\d+\.\d+)', cond)
+        if tm2:
+            cmp = tm2.group(1)
+            thr = float(tm2.group(2))
+        has_time = bool(re.search(r'不反弹|不回升|反抽不回|分钟', cond))
+        has_ratio = '五档比' in cond
+
+        d = data.get(mc) or {}
+        price = d.get('open') or 0
+        price_ok = None
+        if thr is not None and price:
+            price_ok = (price <= thr) if cmp == '≤' else (price >= thr)
+
+        actions.append({
+            'mc': mc, 'code': raw_code, 'name': name, 'when': when,
+            'action': act, 'cond': cond, 'risk': risk,
+            'thr': thr, 'cmp': cmp, 'price': price,
+            'price_ok': price_ok, 'has_time': has_time, 'has_ratio': has_ratio,
+        })
+
+    src = os.path.basename(path)
+    return actions, {'src': src, 'notes': notes}
+
+
+def _pending_status(a):
+    """把竞价核对结果翻译成一句话状态"""
+    if a['price_ok'] is None:
+        return '价格条件待确认（无明确价位）'
+    if not a['price_ok']:
+        if a['cmp'] == '≤':
+            gap = (a['price'] - a['thr']) / a['thr'] * 100
+            return f"价格条件未满足（竞价 {a['price']:.3f} 需回落 {gap:.1f}% 至 ≤{a['thr']:g}）→ 今日暂不触发"
+        gap = (a['thr'] - a['price']) / a['price'] * 100
+        return f"价格条件未满足（竞价 {a['price']:.3f} 需反弹 {gap:.1f}% 至 ≥{a['thr']:g}）→ 今日暂不触发"
+    extra = []
+    if a['has_time']:
+        extra.append('时间条件')
+    if a['has_ratio']:
+        extra.append('五档比条件')
+    if extra:
+        return f"✅ 价格条件已满足 · {'/'.join(extra)}待 09:30 后确认"
+    return '✅ 价格条件已满足'
+
+
+def fetch_minute(code):
+    """腾讯分时接口 → (date, bars)
+
+    ⚠️ 2026-10-28 新增：开盘后复核「N 分钟不反弹」类时间条件用。
+    ⚠️ 返回结构是两层：d['data'][code]['data'] = {'data': ['HHMM 价格 累计量 累计额', ...], 'date': 'YYYYMMDD'}
+    —— 注意里层还有一层 dict，直接取 node['data'] 会拿到 dict 不是 list（10/28 实测踩过）。
+    """
+    import json
+    url = f'https://web.ifzq.gtimg.cn/appstock/app/minute/query?code={code}'
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.hostname
+    port = parsed.port or 443
+    path = parsed.path + ('?' + parsed.query if parsed.query else '')
+    try:
+        addrs = [a[4] for a in socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)]
+        sock = socket.create_connection(addrs[0], timeout=10)
+        try:
+            ctx = ssl.create_default_context()
+            sock = ctx.wrap_socket(sock, server_hostname=host)
+            conn = http.client.HTTPConnection(host, port, timeout=10)
+            conn.sock = sock
+            conn.request('GET', path, headers={'User-Agent': 'Mozilla/5.0'})
+            raw = conn.getresponse().read().decode('utf-8', errors='replace')
+        finally:
+            sock.close()
+        node = json.loads(raw)['data'][code]['data']
+        bars = [r.split() for r in node['data']]
+        return node.get('date'), bars
+    except Exception as e:
+        print(f"[WARN] 分时获取失败 {code}: {e}", file=sys.stderr)
+        return None, []
+
+
+def verify_pending_post_open(pending, window_minutes=5):
+    """开盘后复核：把「价格条件 + 时间条件(5 分钟不反弹)」逐条判定。
+
+    ⚠️ 2026-10-28 新增。纪律（SKILL.md「竞价快照 ≠ 触发证据」）：
+    只有**价格条件与时间条件同时成立**才写「完整触发」；
+    价格条件成立但时间条件不成立 → 写「时间条件不成立 → 未触发」；
+    价格条件不成立 → 写「价格条件未满足 → 未触发」（无论时间条件如何）。
+    """
+    cache = {}
+    results = []
+    for a in pending:
+        r = dict(a)
+        r['verify'] = None
+        if a['mc'] not in cache:
+            cache[a['mc']] = fetch_minute(a['mc'])
+        date, bars = cache[a['mc']]
+        if not bars or not a['thr']:
+            r['verify'] = '无分时数据 / 无明确价位，未复核'
+            results.append(r)
+            continue
+
+        prices = [float(b[1]) for b in bars]
+        op = prices[0]
+        # 5 分钟窗口 = 0930~0934
+        w5 = [float(b[1]) for b in bars if '0930' <= b[0] <= '0934']
+        hi5 = max(w5) if w5 else op
+        hi_all = max(prices)
+        lo_all = min(prices)
+        last = prices[-1]
+
+        if a['cmp'] == '≤':
+            px_ok = op <= a['thr']
+        else:
+            px_ok = op >= a['thr']
+
+        rebound = None
+        if a['has_time']:
+            # 从触发条件里提取反弹阈值（「不回升 0.946」/「反抽不回 0.6582」）
+            rm = re.search(r'(?:不回升|反抽不回|不反弹)\s*([\d.]+)', a['cond'])
+            if rm:
+                rebound = float(rm.group(1))
+                reb_hit = hi_all >= rebound
+            else:
+                reb_hit = None
+        else:
+            reb_hit = None
+
+        r['open_px'] = op
+        r['hi5'] = hi5
+        r['hi_all'] = hi_all
+        r['lo_all'] = lo_all
+        r['last_px'] = last
+        r['bars_end'] = bars[-1][0]
+        r['rebound_thr'] = rebound
+
+        if not px_ok:
+            r['verify'] = f"价格条件未满足（开盘 {op:.3f}，需{'≤' if a['cmp'] == '≤' else '≥'}{a['thr']:g}）→ **未触发**"
+        elif rebound is not None and reb_hit:
+            r['verify'] = f"价格条件满足，但已反弹至 {hi_all:.3f}（≥{rebound:g}）→ **未触发**（反弹条件不成立）"
+        elif rebound is not None:
+            r['verify'] = (f"价格条件满足（开盘 {op:.3f} ≤ {a['thr']:g}），"
+                           f"至 {bars[-1][0]} 未反弹 {rebound:g}（区间高 {hi_all:.3f}）→ **完整触发**")
+        else:
+            r['verify'] = f"价格条件满足（开盘 {op:.3f}）→ 触发（无条件型）"
+
+        # 五档比条件（需实时比值，薄挂单时不作准）
+        if a['has_ratio']:
+            r['verify'] += "｜五档比条件须实时盘口复核"
+        results.append(r)
+    return results
+
+
 def _pad(s, width, align='<'):
     """按**终端显示宽度**补空格（中文算 2 列）
 
@@ -459,7 +698,8 @@ def _rpad(s, width):
     return ' ' * max(0, width - w) + str(s)
 
 
-def build_report(data, holdings, candidates, source='实时', phase='auction', stamp=None):
+def build_report(data, holdings, candidates, source='实时', phase='auction', stamp=None,
+                 pending=None, pending_src=None, verify_note=''):
     """生成报告（文本+Markdown混合）
     phase='auction'  : 09:25 竞价窗口内 → 列名用「开盘价/竞价量」
     phase='intraday' : 已开盘 → 持仓仍用 09:25 快照列名，候选用「现价/成交量」
@@ -596,7 +836,36 @@ def build_report(data, holdings, candidates, source='实时', phase='auction', s
 
         lines.append("```")
 
-    # ── 3. 汇总重点 ──
+    # ── 3. 承接待办（昨晚策略 → 今日动作 + 竞价条件核对）──
+    # ⚠️ 2026-10-28 新增：竞价报告此前不承接昨晚策略的待办动作，
+    # 老大在 09:25 看不到今日要执行什么 → 现在放在「竞价要点」之前。
+    if pending:
+        lines.append("")
+        lines.append("━━━ **📌 承接待办（昨晚策略 → 今日）** ━━━")
+        lines.append("")
+        lines.append(f"*来源：{pending_src.get('src', '')} {verify_note}*")
+        lines.append("")
+        lines.append("```")
+        for a in pending:
+            status = _pending_status(a)
+            # 🔴 = 价格条件已满足 → 动作待处置（需开盘后复核时间/挂单条件）
+            # ⚪ = 价格条件未满足 → 本条动作今日不触发（不是「预警」，是「暂不触发」）
+            flag = '🔴' if a['price_ok'] else '⚪'
+            if a.get('verify'):
+                lines.append(f"{_pad(a['when'], 8)}{_pad(a['name'], 20)}{_pad(a['action'], 16)}{flag} {a['verify']}")
+            else:
+                lines.append(f"{_pad(a['when'], 8)}{_pad(a['name'], 20)}{_pad(a['action'], 16)}{flag} {status}")
+            lines.append(f"        触发条件：{a['cond']}")
+            if a['risk']:
+                lines.append(f"        风险点：{a['risk']}")
+        if pending_src and pending_src.get('notes'):
+            for n in pending_src['notes']:
+                lines.append(f"{_pad(n['when'], 8)}{_pad(n['target'], 20)}{_pad(n['action'], 16)}⚪ {n['cond']}")
+        lines.append("```")
+        lines.append("")
+        lines.append("*⚠️ 竞价快照 ≠ 触发证据：价格条件可由竞价验证，时间/五档比条件须用 09:30 后真实数据逐条复核*")
+
+    # ── 4. 汇总重点 ──
     lines.append("")
     lines.append("━━━ **📈 竞价要点** ━━━")
 
@@ -730,8 +999,20 @@ def main():
 
         phase = 'auction' if now_hm <= '09:29' else 'intraday'
 
+    # 承接待办：昨晚策略里的今日动作（replay 也用，避免重跑丢信息）
+    pending, pending_meta = load_pending_actions(today, HOLDINGS, data)
+
+    # 开盘后（09:30+）→ 用分时逐条复核「价格 + 5 分钟不反弹」条件
+    # ⚠️ 竞价快照只能验价格条件；时间条件必须用 09:30 后真实成交数据判定。
+    verify_note = ''
+    if pending and now_hm > '09:29' and not replay:
+        pending = verify_pending_post_open(pending)
+        verify_note = '（已用 09:30 后分时数据逐条复核）'
+
     report = build_report(data, HOLDINGS, CANDIDATES, source, phase,
-                          stamp='09:25:00' if replay else None)
+                          stamp='09:25:00' if replay else None,
+                          pending=pending, pending_src=pending_meta,
+                          verify_note=verify_note)
 
     # 首次运行（09:25 竞价窗口内）固化快照
     if not snap and phase == 'auction' and not replay:
