@@ -61,13 +61,26 @@ def main():
         print('')
         return 0
 
+    today = datetime.now().strftime('%Y-%m-%d')
+    json_date = payload.get('date', '')
+
+    # 🔴 GHOST-FIX 2026-10-30: 校验 JSON date 是否为今天。
+    # 旧 JSON 残留（如 10/29 写的 alert，date=2026-10-29）会被 relay 当新决策重推，
+    # 因为 state.date 每天重置 sent，而 JSON 里的 date 字段从未被校验。
+    # 修复：非当日的 JSON 一律静默（清空 state，不推送），防止幽灵推送。
+    if json_date != today:
+        # 清空 state（旧数据已过期，不应再被任何一天重推）
+        state = {'date': today, 'sent': []}
+        save_state(state)
+        print('')
+        return 0
+
     alerts = payload.get('alerts') or []
     if not alerts:
         print('')
         return 0
 
     state = load_state()
-    today = datetime.now().strftime('%Y-%m-%d')
     if state.get('date') != today:
         state = {'date': today, 'sent': []}
     sent = set(state.get('sent', []))
