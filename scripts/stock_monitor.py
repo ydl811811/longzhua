@@ -269,6 +269,15 @@ def check_position(code, name, market, cfg, state):
 
     # 3. TP 触达（v3 schema 优先，老 schema fallback）
     tp_list = get_take_profit_list(cfg)
+    # ── 2026-11-04 新增：T+1 可卖性校验（老大纠正「今天刚买，应该无法卖出」）──
+    # A 股 ETF 买入当日不可卖。若全部筹码都是今日买入 → 今日 TP 不可执行，
+    # 只提示「T+1 锁定，明日执行」，不推「请确认卖出」误导动作。
+    today_str = datetime.now().strftime('%Y-%m-%d')
+    batches = cfg.get('entry_batches') or []
+    locked_shares = sum(int(b.get('shares') or 0) for b in batches
+                        if str(b.get('date')) == today_str)
+    total_shares = int(cfg.get('shares') or 0)
+    sellable_shares = max(0, total_shares - locked_shares)
     for tp_item in tp_list:
         target = tp_item.get('target')
         status = tp_item.get('status', 'pending')
@@ -285,6 +294,15 @@ def check_position(code, name, market, cfg, state):
                     reduce_shares = round(cfg.get('shares', 0) / 3)
                 # v3 schema 走 reduction_shares（clear shared state）
                 emoji = '🟢' if tp_item.get('level', 1) <= 2 else '⭐'
+                # ── T+1 校验：可卖份数不足 → 不推「请确认卖出」，改推明日执行 ──
+                if reduce_shares and reduce_shares > sellable_shares:
+                    msg = (f'{emoji} {name} 触及TP{tp_item["level"]}！现价{price:.3f} ≥ {target}，'
+                           f'但今日买入 {locked_shares} 份 T+1 锁定（可卖 {sellable_shares} 份）'
+                           f'→ 明日(T+1)开盘执行卖出 {reduce_shares} 份')
+                    msg += f' | 五档比{ratio:.2f}'
+                    send_feishu(msg, emoji)
+                    state = state_mark(state, code, tier)
+                    return msg, state
                 if reduce_shares and reduce_shares > 0:
                     msg = f'{emoji} {name} 触及TP{tp_item["level"]}！现价{price:.3f} ≥ {target}，请确认卖出 {reduce_shares} 份'
                 else:
