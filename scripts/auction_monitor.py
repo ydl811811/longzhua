@@ -299,10 +299,12 @@ def holding_signal(d, sl, tp1, tp2, obs_on=False, exit_line=None, relief_lines=N
         return '⚪观察期(未触线)'
 
     # 检测是否接近止损
+    # ⚠️ 参数名是 sl（台账 stop_loss），曾误写成 stop_loss 导致 NameError
+    #    → 09:25 集合竞价 cron 整轮崩溃（2026-11-05 实测）。此处必须用 sl。
     near_stop = False
     near_tp = False
-    if stop_loss and pre_close:
-        stop_dist = (cur_open - stop_loss) / stop_loss * 100
+    if sl and pre_close:
+        stop_dist = (cur_open - sl) / sl * 100
         if stop_dist <= 2.0:  # 距止损2%以内（含已跌破）
             near_stop = True
     if tp1 and pre_close:
@@ -311,9 +313,9 @@ def holding_signal(d, sl, tp1, tp2, obs_on=False, exit_line=None, relief_lines=N
             near_tp = True
 
     # 信号判断（持仓→偏风险监控）
-    if stop_loss and pre_close and cur_open and stop_loss:
+    if sl and pre_close and cur_open and sl:
         # 已跌破止损线：按跌破深度分级，比"接近止损"更严重
-        stop_dist = (cur_open - stop_loss) / stop_loss * 100
+        stop_dist = (cur_open - sl) / sl * 100
         if stop_dist < 0:
             if stop_dist <= -5.0:
                 return f'🔴已破止损{stop_dist:.1f}%！需处置'
