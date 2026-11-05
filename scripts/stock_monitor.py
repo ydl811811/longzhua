@@ -284,7 +284,9 @@ def check_position(code, name, market, cfg, state):
         # 跳过已 cleared / done 的 TP（实物化后不再触发）
         # 2026-10-26: suspended 也跳过（159326 8/17 B 方案老大手动挂起 TP1-3，
         #   挂起状态不应由脚本自动恢复推送）
-        if status in ('cleared', 'done', 'suspended'):
+        # 2026-11-05: not_executed_by_owner 也跳过（159516 老大明确「已经封板，我不想卖」
+        #   → TP1/TP2/TP3 三档全部作废；若不跳过，明天会再次推「请确认卖出」）
+        if status in ('cleared', 'done', 'suspended', 'not_executed_by_owner'):
             continue
         if target and price >= float(target):
             tier = f"tp{tp_item['level']}"
