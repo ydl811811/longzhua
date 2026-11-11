@@ -40,6 +40,8 @@ import socket
 import re
 from datetime import datetime, time as dtime
 
+from feishu_bot import load_feishu_creds
+
 # ─── 强制 IPv4（避免 qt.gtimg.cn 的 IPv6 抖动）────────────────────
 _socket_orig = socket.getaddrinfo
 socket.getaddrinfo = lambda h, p, f=0, t=0, pr=0, fl=0: _socket_orig(h, p, socket.AF_INET, t, pr, fl)
@@ -53,8 +55,8 @@ CODE = '159516'
 MARKET = 'sz'
 NAME = '半导体设备ETF国泰'
 
-FEISHU_BOT_URL = os.getenv('FEISHU_BOT_URL', 'https://open.feishu.cn/open-apis/bot/v2/hook/fbfd7f01-878c-4ece-80e6-5e7324ab3692')
-FEISHU_BOT_SECRET = os.getenv('FEISHU_BOT_SECRET', '9vXyEvLigZ70Ynw1YeUtI')
+FEISHU_BOT_URL, FEISHU_BOT_SECRET = load_feishu_creds()
+
 
 VOL_FACTOR = 0.8        # 量能门槛：≥ 5 日均量 0.8 倍
 INTRADAY_LOW = 0.431    # 60 日低（破位线）
