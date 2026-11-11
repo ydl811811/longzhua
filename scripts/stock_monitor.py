@@ -32,6 +32,8 @@ import urllib.request
 import socket
 from datetime import datetime, time as dtime
 
+from feishu_bot import load_feishu_creds
+
 # ─── 强制 IPv4（避免 qt.gtimg.cn 的 IPv6 抖动）────────────────────────────────
 _socket_orig = socket.getaddrinfo
 socket.getaddrinfo = lambda h, p, f=0, t=0, pr=0, fl=0: _socket_orig(h, p, socket.AF_INET, t, pr, fl)
@@ -46,8 +48,8 @@ STATE_FILE  = os.path.expanduser('~/.hermes/stock-portfolio/.stock_monitor_state
 LOG_FILE    = os.path.expanduser('~/.hermes/cron/output/stock_monitor.txt')
 
 # ─── 飞书机器人 ───────────────────────────────────────────────────────────
-FEISHU_BOT_URL   = os.getenv('FEISHU_BOT_URL', 'https://open.feishu.cn/open-apis/bot/v2/hook/fbfd7f01-878c-4ece-80e6-5e7324ab3692')
-FEISHU_BOT_SECRET = os.getenv('FEISHU_BOT_SECRET', '9vXyEvLigZ70Ynw1YeUtI')
+FEISHU_BOT_URL, FEISHU_BOT_SECRET = load_feishu_creds()
+
 
 def get_take_profit_list(cfg):
     """v3 schema 优先：读 cfg['take_profit'] list
@@ -70,6 +72,41 @@ def get_take_profit_list(cfg):
                 'old_key': key  # 标记老 key，方便 trace
             })
     return result
+
+def get_effective_stop_loss(cfg, tp_list):
+    """生效止损 = max(基础 stop_loss, 已成交 TP 对应的移动止损)
+
+    2026-11-10 新增（515790 SL/TP 重算）：TP 成交后止损上移，不再手改 stop_loss 字段。
+    台账写法：
+        stop_loss: 0.708            # 基础硬止损（未成交任何 TP 时生效）
+        trailing_stop:
+          after_tp1: 0.730          # take_profit level 1 的 status 变为 done/cleared 后生效
+          after_tp2: 0.750
+    生效口径：取所有「已成交档位」对应移动止损与基础止损的最大值（止损只能上移，永不下移）。
+    未成交的 TP 不参与计算。
+    """
+    base = cfg.get('stop_loss')
+    vals = []
+    if base:
+        try:
+            vals.append(float(base))
+        except (TypeError, ValueError):
+            pass
+    trail = cfg.get('trailing_stop') or {}
+    if isinstance(trail, dict):
+        for tp_item in (tp_list or []):
+            lvl = tp_item.get('level')
+            st = str(tp_item.get('status', 'pending'))
+            if st not in ('done', 'cleared'):
+                continue
+            v = trail.get(f'after_tp{lvl}')
+            if v is not None:
+                try:
+                    vals.append(float(v))
+                except (TypeError, ValueError):
+                    pass
+    return max(vals) if vals else None
+
 
 def get_add_position_list(cfg):
     """v3 schema：不在主台账（pending_orders.yaml 独立文件）
@@ -249,10 +286,21 @@ def check_position(code, name, market, cfg, state):
     obs_on = bool(obs.get('enabled')) and obs.get('exit_line') is not None
     if obs_on:
         sl = float(obs['exit_line'])   # 显示用红线改成离场线
-    if not obs_on and cfg.get('stop_loss') and price <= float(cfg['stop_loss']):
+    tp_list = get_take_profit_list(cfg)
+    # ── 2026-11-10 新增：生效止损 = max(基础 stop_loss, 已成交 TP 的移动止损) ──
+    # 触发口径 = 盘中触发（live price ≤ 生效止损即推），不采用收盘确认。
+    # 依据（515790 300 日样本重算）：同止损位下收盘确认→次日开盘仅 +1.4pp 胜率，
+    # 尾部却由 -208 元恶化到 -519 元（跳空风险），故否决收盘确认。
+    eff_sl = get_effective_stop_loss(cfg, tp_list)
+    if not obs_on and eff_sl is not None and price <= eff_sl:
         tier = 'stop_loss'
         if state_should_trigger(state, code, tier):
-            msg = f'🔴 {name} 触发止损！现价{price:.3f} ≤ 止损{cfg["stop_loss"]}，请确认卖出'
+            base_sl = cfg.get('stop_loss')
+            trail = (cfg.get('trailing_stop') or {})
+            moved = ''
+            if base_sl is not None and eff_sl != float(base_sl):
+                moved = f'（已移动止损，基础 {base_sl} → {eff_sl}）'
+            msg = f'🔴 {name} 触发止损！现价{price:.3f} ≤ 止损{eff_sl}{moved}，请确认卖出'
             send_feishu(msg, '🔴')
             state = state_mark(state, code, tier)
             return msg, state
@@ -267,8 +315,20 @@ def check_position(code, name, market, cfg, state):
             state = state_mark(state, code, tier)
             return msg, state
 
+    # 2b. 预警线（2026-11-10 新增，515790 0.722）
+    # 语义 = 只提醒，不减仓不清仓；与 stop_loss 分属不同字段 + 不同去重档位（tier=warn_line）。
+    # 排序在止损之后：价格同时跌破 0.708 与 0.722 时，止损优先（硬风控 > 提示）。
+    warn_l = cfg.get('warn_line')
+    if warn_l and price <= float(warn_l):
+        tier = 'warn_line'
+        if state_should_trigger(state, code, tier):
+            msg = (f'⚠️ {name} 跌破预警线！现价{price:.3f} ≤ {warn_l}（仅预警，不减仓不清仓）。'
+                   f'硬止损 {eff_sl}，跌破才清仓。')
+            send_feishu(msg, '⚠️')
+            state = state_mark(state, code, tier)
+            return msg, state
+
     # 3. TP 触达（v3 schema 优先，老 schema fallback）
-    tp_list = get_take_profit_list(cfg)
     # ── 2026-11-04 新增：T+1 可卖性校验（老大纠正「今天刚买，应该无法卖出」）──
     # A 股 ETF 买入当日不可卖。若全部筹码都是今日买入 → 今日 TP 不可执行，
     # 只提示「T+1 锁定，明日执行」，不推「请确认卖出」误导动作。
@@ -309,6 +369,12 @@ def check_position(code, name, market, cfg, state):
                     msg = f'{emoji} {name} 触及TP{tp_item["level"]}！现价{price:.3f} ≥ {target}，请确认卖出 {reduce_shares} 份'
                 else:
                     msg = f'{emoji} {name} 触及TP{tp_item["level"]}！现价{price:.3f} ≥ {target}，请确认卖出'
+                # ── 2026-11-10 成交登记指引 ──
+                # 卖出在券商 App 由老大执行；执行后必须登记台账 status → done，
+                # 否则移动止损不会生效（生效止损仍停在基础 SL），且持仓份额口径错。
+                msg += (f' | 成交后请回复龙爪登记（自动改 status=done + 扣减份额 + 上移止损）：'
+                        f'「{code} TP{tp_item["level"]} 已卖 {reduce_shares} 份 @ 实际成交价」'
+                        f'（或手动跑 tp_exec.py {code} {tp_item["level"]} --price <成交价>）')
                 msg += f' | 五档比{ratio:.2f}'
                 send_feishu(msg, emoji)
                 state = state_mark(state, code, tier)
@@ -342,7 +408,12 @@ def check_position(code, name, market, cfg, state):
         mode_tag = '[观察期]'
     else:
         sl_str = f'止损{sl}' if sl else ''
+        if eff_sl is not None and sl is not None and eff_sl != float(sl):
+            sl_str = f'止损{sl}→生效{eff_sl}'
         mode_tag = ''
+    warn_l = cfg.get('warn_line')
+    if warn_l:
+        sl_str += f' 预警{warn_l}'
     # v3 schema tp list 转 str
     tp_str = ' '.join([f"TP{i['level']}={i['target']}({i.get('status','?')[:3]})" for i in tp_list])
     # LONGZHUA FIXED 2026-08-04: 之前用 TP 循环的 target 变量显示，导致 add_str 始终 None；
