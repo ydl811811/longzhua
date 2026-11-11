@@ -30,6 +30,38 @@ sys.path.insert(0, os.path.expanduser("~/.hermes/scripts"))
 from tushare_xianyu import call_with_failover
 
 POOL_FILE = Path.home() / ".hermes/stock-portfolio/related_stocks_pool.yaml"
+POS_FILE = Path.home() / ".hermes/stock-portfolio/monitor_positions.yaml"
+WATCHED_FILE = Path.home() / ".hermes/stock-portfolio/monitor_watched.yaml"
+
+
+def load_active_etfs() -> set:
+    """返回仍需监控的 ETF 代码集合（持仓 + 候选池）。
+
+    2026-11-06 修正：观察池是 2026-08-10 按「5 只持仓」建的，池里 5 只 ETF
+    （159299/159326/513050/513120/562800）到 11/06 已全部清仓（status=sold）。
+    原脚本不校验台账状态 → 每天仍按「评估 ETF 持仓：减仓/加仓/不动」推送，
+    等于对空仓标的反复喊话 = 幽灵警报。
+    现改为：只有【台账 status=holding 且 shares>0】或【候选池 monitor_watched.yaml
+    仍为 waiting_* 状态】的 ETF 才纳入监控；已清仓且不在候选池的直接跳过。
+    """
+    active = set()
+    try:
+        with open(POS_FILE, 'r') as f:
+            d = yaml.safe_load(f) or {}
+        for p in d.get('positions', []) or []:
+            if p.get('status') == 'holding' and (p.get('shares') or 0) > 0:
+                active.add(str(p.get('code')))
+    except Exception as e:
+        print(f"  [WARN] 读台账失败，按空仓处理: {e}")
+    try:
+        with open(WATCHED_FILE, 'r') as f:
+            w = yaml.safe_load(f) or {}
+        for x in w.get('watched', []) or []:
+            if str(x.get('status', '')).startswith('waiting'):
+                active.add(str(x.get('code')))
+    except Exception as e:
+        print(f"  [WARN] 读候选池失败: {e}")
+    return active
 
 
 def load_pool():
@@ -67,24 +99,37 @@ def get_stock_quote(code: str) -> dict:
     return {'code': code, 'price': 0, 'pct_change': 0}
 
 
-def get_top_list(trade_date: str) -> list:
-    """龙虎榜每日"""
+def get_top_list(trade_date: str) -> tuple:
+    """龙虎榜每日 -> (items, status) status ∈ ok / empty / error
+
+    2026-11-06 实测三种返回都出现过：
+      code=0 items>0  → ok（正常）
+      code=0 items=0  → empty（当日数据尚未入库，11/05 有 69 条 / 11/04 有 79 条）
+      code=503        → error（中继上游随机路由到无 top_list 权限的节点，间歇性，
+                        同一 key 立刻重试即恢复 —— 非本机配置问题）
+    """
     r = call_with_failover('top_list', {'trade_date': trade_date})
     if r.get('code') == 0:
         items = r.get('data', {}).get('items', [])
         fields = r.get('data', {}).get('fields', [])
-        return [dict(zip(fields, i)) for i in items]
-    return []
+        if not items:
+            return [], 'empty'
+        return [dict(zip(fields, i)) for i in items], 'ok'
+    print(f"  [WARN] top_list 调用失败 code={r.get('code')} msg={str(r.get('msg'))[:60]}")
+    return [], 'error'
 
 
-def get_hsgt_top(trade_date: str) -> list:
-    """北向 TOP10"""
+def get_hsgt_top(trade_date: str) -> tuple:
+    """北向 TOP10 -> (items, status)，语义同 get_top_list"""
     r = call_with_failover('hsgt_top10', {'trade_date': trade_date})
     if r.get('code') == 0:
         items = r.get('data', {}).get('items', [])
         fields = r.get('data', {}).get('fields', [])
-        return [dict(zip(fields, i)) for i in items]
-    return []
+        if not items:
+            return [], 'empty'
+        return [dict(zip(fields, i)) for i in items], 'ok'
+    print(f"  [WARN] hsgt_top10 调用失败 code={r.get('code')} msg={str(r.get('msg'))[:60]}")
+    return [], 'error'
 
 
 HK_ALIAS = {
@@ -145,6 +190,27 @@ def get_quotes(market_codes: list) -> dict:
 def check_signals(trade_date: str):
     """检查所有关联股票信号（信号1 涨跌幅走 qt.gtimg.cn 直连 + 信号2/3 走 tushare）"""
     pool = load_pool()
+
+    # 2026-11-06：只监控仍有效的 ETF（持仓 + 候选池），已清仓的直接剔除
+    active = load_active_etfs()
+    holding_codes = set()
+    try:
+        with open(POS_FILE, 'r') as f:
+            _d = yaml.safe_load(f) or {}
+        for _p in _d.get('positions', []) or []:
+            if _p.get('status') == 'holding' and (_p.get('shares') or 0) > 0:
+                holding_codes.add(str(_p.get('code')))
+    except Exception:
+        pass
+    pool_holdings = [h for h in pool['holdings'] if str(h.get('etf_code')) in active]
+    skipped = [h.get('etf_code') for h in pool['holdings'] if str(h.get('etf_code')) not in active]
+    if skipped:
+        print(f"  [SKIP] 已清仓且不在候选池，跳过: {', '.join(sorted(skipped))}")
+    if not pool_holdings:
+        print("  [SKIP] 无有效监控标的（持仓 0 + 候选池无交集）")
+        return [], {'qtimg_quote': 'ok', 'tushare_top_list': 'ok', 'tushare_hsgt_top10': 'ok'}, [], trade_date
+    pool['holdings'] = pool_holdings
+
     triggers = []
 
     # 信号 1：当日涨跌幅（直连行情源，主信号，2026-10-20 启用）
@@ -169,20 +235,24 @@ def check_signals(trade_date: str):
     # tushare 查询用真实行情交易日（--date 传的是 yesterday，盘中收盘后已过期）
     query_date = quote_trade_date or trade_date
 
-    # 信号 2/3：北向 TOP10 + 龙虎榜（依赖 tushare 闲鱼代理，可能整体失效）
-    top_list = get_top_list(query_date)
+    # 信号 2/3：北向 TOP10 + 龙虎榜（依赖 tushare 闲鱼，可能整体失效）
+    top_list, top_status = get_top_list(query_date)
     time.sleep(2)
-    hsgt_top = get_hsgt_top(query_date)
+    hsgt_top, hsgt_status = get_hsgt_top(query_date)
     time.sleep(2)
 
     source_status = {
         'qtimg_quote': 'ok' if quotes else 'fail',
-        'tushare_top_list': 'ok' if top_list else 'unavailable',
-        'tushare_hsgt_top10': 'ok' if hsgt_top else 'unavailable',
+        'tushare_top_list': top_status,
+        'tushare_hsgt_top10': hsgt_status,
     }
-    degraded = [k for k, v in source_status.items() if v == 'unavailable']
+    degraded = [k for k, v in source_status.items() if v == 'error']
+    empty = [k for k, v in source_status.items() if v == 'empty']
     if degraded:
-        print(f"  [WARN] tushare 代理不可用 -> {degraded} 本次未评估（这是盲区，不是'无信号'）")
+        print(f"  [WARN] tushare {degraded} 调用报错（本次未评估，是盲区，不是'无信号'）")
+    elif empty:
+        # 2026-11-06：代理已修好（直连可用），空结果 = 当日数据尚未入库/延迟
+        print(f"  [WARN] tushare {empty} 返回 0 条（接口通，当日数据延迟，不是代理故障）")
 
     # 索引化
     dragon_dict = {i.get('name', ''): i for i in top_list}
@@ -237,17 +307,21 @@ def check_signals(trade_date: str):
                     pcts.append(q['pct_change'])
             neg = any(p < 0 for p in pcts)
             has_pos = any(p > 0 for p in pcts)
+            is_holding_etf = etf_code in holding_codes
             if neg and has_pos:
                 hint = '关联股涨跌互现 -> 分化信号，逐只看方向'
             elif neg:
-                hint = '关联股走弱 -> 优先复核ETF均线与止损'
+                hint = ('关联股走弱 -> 优先复核ETF均线与止损' if is_holding_etf
+                        else '关联股走弱 -> 候选池复核：是否跌破止损/结构位')
             else:
                 hint = '关联股走强 -> 偏正面信号'
+            action = ('评估ETF持仓：减仓/加仓/不动' if is_holding_etf
+                      else '候选池复核：确认右侧条件（站上MA20 + 放量）再评估建仓')
             triggers.append({
                 'etf_code': etf_code,
                 'etf_name': etf_name,
                 'triggered_stocks': triggered_stocks,
-                'suggested_action': '评估ETF持仓：减仓/加仓/不动',
+                'suggested_action': action,
                 'direction_hint': hint,
                 'notify': True,
             })
