@@ -18,6 +18,8 @@ import yaml
 from datetime import datetime
 from pathlib import Path
 
+from feishu_bot import load_feishu_creds
+
 # ============ 强制 IPv4 的 fetch（避免 IPv6 hang）============
 def fetch(url, headers=None, timeout=10, enc='gbk'):
     """强制 IPv4 连接，避免 IPv6 卡死
@@ -64,14 +66,14 @@ POSITIONS_ACTIVE_FILE = Path.home() / '.hermes/stock-portfolio/positions_active.
 OUTPUT_DIR = Path.home() / '.hermes/cron/output/1af1d3ae2ace'
 
 # 飞书推送
-FEISHU_BOT_URL = "https://open.feishu.cn/open-apis/bot/v2/hook/fbfd7f01-878c-4ece-80e6-5e7324ab3692"
-FEISHU_SECRET = "9vXyEvLigZ70Ynw1YeUtI"
+FEISHU_BOT_URL, FEISHU_BOT_SECRET = load_feishu_creds()
+
 
 
 def send_feishu(msg):
     """发送飞书（带签名验证）"""
     timestamp = int(time.time())
-    string_to_sign = f"{timestamp}\n{FEISHU_SECRET}"
+    string_to_sign = f"{timestamp}\n{FEISHU_BOT_SECRET}"
     hmac_code = hmac.new(string_to_sign.encode("utf-8"), digestmod=hashlib.sha256).digest()
     sign = base64.b64encode(hmac_code).decode('utf-8')
     
