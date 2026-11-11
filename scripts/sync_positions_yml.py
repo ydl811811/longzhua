@@ -24,7 +24,13 @@ SYNC_FILES = [
     'decision_log.yaml',
     'monitor_positions.yaml',
     'monitor_watched.yaml',
+    'portfolio_state.yaml',
 ]  # 2026-07-24 废弃 positions_active.yaml — 详见 ~/.hermes/stock-portfolio/decision_log.yaml
+
+# 归档目录（2026-11-09 方案C：decision_log 按月轮转后，历史条目在此）
+# 一并镜像到 NAS，灵爪侧可读全历史（活文件只有最近 45 条 decisions）
+ARCHIVE_DIR = Path.home() / '.hermes' / 'stock-portfolio_archive' / 'decision_log'
+NAS_ARCHIVE_SUB = 'decision_log_archive'
 
 # NAS 镜像目标
 NAS_DIR = '/home/YDL/.openclaw/workspace/stock_shared'
@@ -65,6 +71,34 @@ def sync_one(src: Path, dry_run: bool = False) -> bool:
     return False
 
 
+def sync_archive(dry_run: bool = False) -> bool:
+    """scp 归档目录到 NAS（决策日志历史按月轮转后仍需灵爪侧可读）"""
+    if not ARCHIVE_DIR.exists():
+        log(f'  ⚠️ 归档目录不存在: {ARCHIVE_DIR}（跳过）')
+        return True
+    files = sorted(p for p in ARCHIVE_DIR.glob('*.yaml'))
+    # 不同步 _full 合并文件（冗余、体积大；灵爪侧按月文件读即可）
+    files = [p for p in files if '_full' not in p.name]
+    if not files:
+        log('  ⚠️ 归档目录无 yaml 文件（跳过）')
+        return True
+    total = sum(p.stat().st_size for p in files)
+    if dry_run:
+        log(f'  [DRY] decision_log_archive/: {len(files)} 文件 {total} bytes')
+        return True
+    dst = f'{NAS_HOST}:{NAS_DIR}/{NAS_ARCHIVE_SUB}/'
+    r = subprocess.run(
+        ['scp', '-i', SSH_KEY, '-o', 'StrictHostKeyChecking=no',
+         *[str(p) for p in files], dst],
+        capture_output=True, text=True, timeout=60,
+    )
+    if r.returncode == 0:
+        log(f'  ✅ decision_log_archive/: {len(files)} 文件 {total} bytes → NAS')
+        return True
+    log(f'  ❌ decision_log_archive/: {r.stderr.strip()[:200]}')
+    return False
+
+
 def main() -> int:
     dry_run = '--dry-run' in sys.argv
     log(f'=== 同步开始 (dry_run={dry_run}) ===')
@@ -73,8 +107,11 @@ def main() -> int:
         src = SRC_DIR / name
         if sync_one(src, dry_run=dry_run):
             ok_count += 1
-    log(f'=== 同步完成 {ok_count}/{len(SYNC_FILES)} ===')
-    return 0 if ok_count == len(SYNC_FILES) else 1
+    if sync_archive(dry_run=dry_run):
+        ok_count += 1
+    total = len(SYNC_FILES) + 1
+    log(f'=== 同步完成 {ok_count}/{total} ===')
+    return 0 if ok_count == total else 1
 
 
 if __name__ == '__main__':
