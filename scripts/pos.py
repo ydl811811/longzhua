@@ -117,6 +117,55 @@ def check():
         implied_mv = round(float(acc['total_assets']) - float(acc['cash']) - other, 2)
         if acc.get('market_value') is not None and abs(implied_mv - float(acc['market_value'])) > 0.05:
             problems.append(f"总资产-现金-other_funds={implied_mv} ≠ market_value={acc['market_value']}")
+    # --- 2026-11-12 new: candidate-pool / trade-fact / TP sanity guards ---
+    # 背景：老大告知「今日买入了 512480」但台账没落盘 -> 龙爪反复重跑脚本确认。
+    # 这三道闸就是当时缺的，补上后同类漂移会被 check() 直接拦下。
+    import os as _os
+    BASE_DIR = _os.path.dirname(POS)
+
+    # 4) 同一代码不得同时在持仓和候选池（候选池有两份 yaml，只删一份 = 没删）
+    for _cf in ('candidates_watch.yaml', 'monitor_watched.yaml'):
+        _cfp = _os.path.join(BASE_DIR, _cf)
+        if not _os.path.exists(_cfp):
+            continue
+        try:
+            import yaml as _yaml
+            _cdoc = _yaml.safe_load(open(_cfp, encoding='utf-8')) or {}
+        except Exception as _e:
+            problems.append(f'{_cf}: 读取失败 {_e}')
+            continue
+        for _ck in ('candidates', 'watched'):
+            for _c in (_cdoc.get(_ck) or []):
+                _cc = str(_c.get('code'))
+                if _cc in mp_h:
+                    problems.append(f'{_cc}: 同时在持仓和 {_cf}#{_ck} —— 已持仓不该再当候选，会每天重复推建仓信号')
+                if str(_c.get('status') or '').startswith('converted_to_holding'):
+                    problems.append(f'{_cc}: {_cf}#{_ck} 仍是 converted_to_holding 残留条目，应彻底移除')
+
+    # 5) 持仓必须有 entry_batches/actions（成交落盘证据）—— 没有 = 成交从未落盘
+    for _code, _p in mp_h.items():
+        if not (_p.get('entry_batches') or _p.get('actions')):
+            problems.append(f'{_code}: holding 但无 entry_batches/actions —— 成交事实未落盘，下轮会重复向老大确认')
+
+    # 6) pending 档的 TP 必须高于成本；止损必须低于成本（套用旧档未重算）
+    for _code, _p in mp_h.items():
+        _cost = _p.get('cost')
+        if _cost is None:
+            continue
+        for _tp in (_p.get('take_profit') or []):
+            _tgt = _tp.get('target')
+            if _tgt is None:
+                continue
+            # TP 恰好等于成本 = 回本线，合法（成本上方 0.5% 容差）。
+            # 明显低于成本（>0.5%）才是「套用旧档未按实际成交重算」。
+            if float(_tgt) < float(_cost) * 0.995 and str(_tp.get('status', 'pending')) == 'pending':
+                problems.append(f"{_code}: TP{_tp.get('level')}={_tgt} < 成本 {_cost} —— 成交价高于旧止盈档，旧 TP 必须作废重算")
+        _sl = _p.get('stop_loss')
+        # 止损 == 成本 = 保本止损，合法（成本下方 0.5% 容差）。
+        # 止损高于成本 = 无效止损，才报错。
+        if _sl is not None and float(_sl) > float(_cost) * 1.005:
+            problems.append(f'{_code}: 止损 {_sl} > 成本 {_cost} —— 止损档无效')
+
     print(f"持仓 {len(mp_h)} 只 | 成本合计 {cost_sum} 元 | 现金 {acc.get('cash','?')} | 总资产 {acc.get('total_assets','?')}")
     if problems:
         print('\n⚠️ 发现漂移：')
