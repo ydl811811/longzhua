@@ -32,6 +32,19 @@
 - 任何"网络慢"结论前**先确认是不是卡在 141 USB 网卡**
 - 默认网关通常走 50（透明代理），改网关到 31.1 = 走小来硬路由（绕过代理）
 
+## 内存天花板（2026-11-11 OOM 事故后固化）
+
+- **141 物理内存只有 ~5.95GB + 4GB swap**（`free -m` 实测 5806MB total），swap 打满就等于没有内存。
+  任何"跑脚本/批处理/大 JSON"的请求前，先看 `free -m` 的 available 和 swap 剩余。
+- **`execute_code` 无内存/时间护栏**（源码无 `RLIMIT_AS` / `max_memory` 可配）——单个 cell 曾把 anon-RSS 吃到 4.75GB
+  直接触发全局 OOM打死 gateway。跑重活优先用 `terminal` + `timeout` + `ulimit -v`，不要塞进 execute_code。
+- **已落地护栏**（2026-11-11）：gateway cgroup `MemoryHigh=3000M`/`MemoryMax=3800M`/`MemorySwapMax=1G`
+  （`~/.config/systemd/user/hermes-gateway.service.d/memory.conf`）；全部 cron 已错峰；
+  `scripts/swap_watchdog.sh` 每 10 分钟告警（swap ≥80% 或 MemAvailable <500MB）。
+- **state.db 历史有独立副本**：库损坏时先查 `~/.hermes/sessions/`（`session_*.json` + `*.jsonl`），
+  不要死磕 `sqlite3 .recover`（本机实测必失败）。恢复流程见 `hermes-devops/references/state-db-recovery-20261111.md`。
+- **2026-11-11 OOM 事故复盘**：`hermes-devops/references/oom-incident-141-20261111.md`
+
 ## 141 独立代理通道（2026-09-19 老大指示部署）
 
 **目的**：软路由 50 nikki 挂时 141 仍能出国（老大原话："我就怕软路由挂了，你就不能出国访问了"）。
