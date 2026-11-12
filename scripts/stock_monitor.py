@@ -255,12 +255,49 @@ def fetch_stock(code, market='sz'):
             'volume': int(parts[6]) if len(parts) > 6 else 0,
             'ratio': ratio,
             'buy_vols': buy_vols, 'sell_vols': sell_vols,
+            # 行情快照时间戳 YYYYMMDDHHMMSS（parts[30]）——用于判定 high/low
+            # 属于哪一天，避免盘前拿到上一交易日残留极值。
+            'quote_ts': parts[30] if len(parts) > 30 else '',
         }
     except (ValueError, IndexError) as e:
         return {'err': f'parse: {e}'}
 
 
 # ─── 持仓监控 ─────────────────────────────────────────────────────────────
+def resolve_extremes(data):
+    """从行情快照解析出上/下行触发源。
+
+    返回 (up_price, down_price, day_high, day_low)：
+      up_price   = max(现价, 当日最高)  → 用于 TP / 涨到触发位（reversal）
+      down_price = min(现价, 当日最低)  → 用于 止损 / 预警 / 跌到触发位（pullback）
+
+    两个护栏（缺一不可）：
+    1. 防御性校验：极值必须落在 0 < low <= 现价 <= high，否则退回纯现价口径。
+       否则腾讯偶发返回 0 时 min(price, 0)=0 → 全量持仓止损立即误触发。
+    2. 跨日守卫：腾讯在盘前/非交易时段返回的是「上一交易日」的完整快照
+       （parts[30] 时间戳形如 20261111161445），直接采信其 high/low 会让
+       次日开盘第一轮读到昨日极值 → 推一条完全错误的预警/止损。
+       故要求 quote_ts 前 8 位 == 今天的 YYYYMMDD。
+    """
+    price = float(data['price'])
+    try:
+        day_high = float(data.get('high') or 0)
+        day_low = float(data.get('low') or 0)
+    except (TypeError, ValueError):
+        day_high = day_low = 0.0
+    if not (0 < day_high and day_high >= price):
+        day_high = 0.0
+    if not (0 < day_low <= price):
+        day_low = 0.0
+    quote_ts = str(data.get('quote_ts') or '')
+    if quote_ts[:8] != datetime.now().strftime('%Y%m%d'):
+        day_high = 0.0
+        day_low = 0.0
+    up_price = max(price, day_high) if day_high else price
+    down_price = min(price, day_low) if day_low else price
+    return up_price, down_price, day_high, day_low
+
+
 def check_position(code, name, market, cfg, state):
     """持仓：止损 / 观察线 / TP1-3 / 补仓位"""
     if cfg.get('status') != 'holding':
@@ -273,6 +310,15 @@ def check_position(code, name, market, cfg, state):
     price = data['price']
     ratio = data['ratio']
     msgs = []
+
+    # ── 2026-11-11 修复：触发源取「现价 + 当日极值」中更激进的一侧 ────────
+    # 背景：cron 每 5 分钟采样「现价」，盘中瞬间冲高/跳水若在两个采样点之间发生，
+    # 就会被判成「没触达」。2026-11-11 实测：159583 旧 TP2 = 1.154，腾讯行情
+    # parts[33]（当日最高）= 1.154 已触达，但分时逐笔最高仅 1.152、采样现价更低
+    # → TP2 从未触发 = 漏提醒。
+    # 口径：TP/上行线用 max(现价, 当日最高)；止损/下行线用 min(现价, 当日最低)。
+    # 解析与两个护栏统一走 resolve_extremes()（候选股同一套口径）。
+    up_price, down_price, day_high, day_low = resolve_extremes(data)
 
     # 1. 止损
     sl = cfg.get('stop_loss')
@@ -292,7 +338,7 @@ def check_position(code, name, market, cfg, state):
     # 依据（515790 300 日样本重算）：同止损位下收盘确认→次日开盘仅 +1.4pp 胜率，
     # 尾部却由 -208 元恶化到 -519 元（跳空风险），故否决收盘确认。
     eff_sl = get_effective_stop_loss(cfg, tp_list)
-    if not obs_on and eff_sl is not None and price <= eff_sl:
+    if not obs_on and eff_sl is not None and down_price <= eff_sl:
         tier = 'stop_loss'
         if state_should_trigger(state, code, tier):
             base_sl = cfg.get('stop_loss')
@@ -300,17 +346,19 @@ def check_position(code, name, market, cfg, state):
             moved = ''
             if base_sl is not None and eff_sl != float(base_sl):
                 moved = f'（已移动止损，基础 {base_sl} → {eff_sl}）'
-            msg = f'🔴 {name} 触发止损！现价{price:.3f} ≤ 止损{eff_sl}{moved}，请确认卖出'
+            extra = f'（当日最低 {day_low:.3f}）' if day_low and day_low < price else ''
+            msg = f'🔴 {name} 触发止损！现价{price:.3f}{extra} ≤ 止损{eff_sl}{moved}，请确认卖出'
             send_feishu(msg, '🔴')
             state = state_mark(state, code, tier)
             return msg, state
 
     # 2. 观察线
     wl = cfg.get('watch_line')
-    if wl and price <= float(wl):
+    if wl and down_price <= float(wl):
         tier = 'watch_line'
         if state_should_trigger(state, code, tier):
-            msg = f'🚨 {name} 跌破观察线！现价{price:.3f} ≤ {wl}，必须出局！'
+            extra = f'（当日最低 {day_low:.3f}）' if day_low and day_low < price else ''
+            msg = f'🚨 {name} 跌破观察线！现价{price:.3f}{extra} ≤ {wl}，必须出局！'
             send_feishu(msg, '🚨')
             state = state_mark(state, code, tier)
             return msg, state
@@ -319,10 +367,11 @@ def check_position(code, name, market, cfg, state):
     # 语义 = 只提醒，不减仓不清仓；与 stop_loss 分属不同字段 + 不同去重档位（tier=warn_line）。
     # 排序在止损之后：价格同时跌破 0.708 与 0.722 时，止损优先（硬风控 > 提示）。
     warn_l = cfg.get('warn_line')
-    if warn_l and price <= float(warn_l):
+    if warn_l and down_price <= float(warn_l):
         tier = 'warn_line'
         if state_should_trigger(state, code, tier):
-            msg = (f'⚠️ {name} 跌破预警线！现价{price:.3f} ≤ {warn_l}（仅预警，不减仓不清仓）。'
+            extra = f'（当日最低 {day_low:.3f}）' if day_low and day_low < price else ''
+            msg = (f'⚠️ {name} 跌破预警线！现价{price:.3f}{extra} ≤ {warn_l}（仅预警，不减仓不清仓）。'
                    f'硬止损 {eff_sl}，跌破才清仓。')
             send_feishu(msg, '⚠️')
             state = state_mark(state, code, tier)
@@ -348,7 +397,7 @@ def check_position(code, name, market, cfg, state):
         #   → TP1/TP2/TP3 三档全部作废；若不跳过，明天会再次推「请确认卖出」）
         if status in ('cleared', 'done', 'suspended', 'not_executed_by_owner'):
             continue
-        if target and price >= float(target):
+        if target and up_price >= float(target):
             tier = f"tp{tp_item['level']}"
             if state_should_trigger(state, code, tier):
                 reduce_shares = tp_item.get('shares', 0)
@@ -356,9 +405,15 @@ def check_position(code, name, market, cfg, state):
                     reduce_shares = round(cfg.get('shares', 0) / 3)
                 # v3 schema 走 reduction_shares（clear shared state）
                 emoji = '🟢' if tp_item.get('level', 1) <= 2 else '⭐'
+                # 触发价标注：现价未达但当日最高已达时，文案用当日最高并注明来源，
+                # 避免老大看到「现价 1.147 ≥ 目标 1.154」这种自相矛盾的表述。
+                if up_price > price:
+                    px_txt = f'当日最高 {up_price:.3f}'
+                else:
+                    px_txt = f'现价 {price:.3f}'
                 # ── T+1 校验：可卖份数不足 → 不推「请确认卖出」，改推明日执行 ──
                 if reduce_shares and reduce_shares > sellable_shares:
-                    msg = (f'{emoji} {name} 触及TP{tp_item["level"]}！现价{price:.3f} ≥ {target}，'
+                    msg = (f'{emoji} {name} 触及TP{tp_item["level"]}！{px_txt} ≥ {target}，'
                            f'但今日买入 {locked_shares} 份 T+1 锁定（可卖 {sellable_shares} 份）'
                            f'→ 明日(T+1)开盘执行卖出 {reduce_shares} 份')
                     msg += f' | 五档比{ratio:.2f}'
@@ -366,9 +421,9 @@ def check_position(code, name, market, cfg, state):
                     state = state_mark(state, code, tier)
                     return msg, state
                 if reduce_shares and reduce_shares > 0:
-                    msg = f'{emoji} {name} 触及TP{tp_item["level"]}！现价{price:.3f} ≥ {target}，请确认卖出 {reduce_shares} 份'
+                    msg = f'{emoji} {name} 触及TP{tp_item["level"]}！{px_txt} ≥ {target}，请确认卖出 {reduce_shares} 份'
                 else:
-                    msg = f'{emoji} {name} 触及TP{tp_item["level"]}！现价{price:.3f} ≥ {target}，请确认卖出'
+                    msg = f'{emoji} {name} 触及TP{tp_item["level"]}！{px_txt} ≥ {target}，请确认卖出'
                 # ── 2026-11-10 成交登记指引 ──
                 # 卖出在券商 App 由老大执行；执行后必须登记台账 status → done，
                 # 否则移动止损不会生效（生效止损仍停在基础 SL），且持仓份额口径错。
@@ -388,14 +443,15 @@ def check_position(code, name, market, cfg, state):
         # 已 cancelled / filled / expired 不再触发
         if status in ('cancelled', 'filled', 'expired'):
             continue
-        if target and price <= float(target):
+        if target and down_price <= float(target):
             tier = f"add_pos_{add_item['level']}"
             if state_should_trigger(state, code, tier):
                 add_shares = add_item.get('shares', 0)
+                extra = f'（当日最低 {day_low:.3f}）' if day_low and day_low < price else ''
                 if add_shares:
-                    msg = f'📥 {name} 加仓{add_item["level"]}信号！现价{price:.3f} ≤ 目标{target}，请确认加仓 {add_shares} 份'
+                    msg = f'📥 {name} 加仓{add_item["level"]}信号！现价{price:.3f}{extra} ≤ 目标{target}，请确认加仓 {add_shares} 份'
                 else:
-                    msg = f'📥 {name} 加仓{add_item["level"]}信号！现价{price:.3f} ≤ 目标{target}，请确认加仓'
+                    msg = f'📥 {name} 加仓{add_item["level"]}信号！现价{price:.3f}{extra} ≤ 目标{target}，请确认加仓'
                 msg += f' | 五档比{ratio:.2f}'
                 send_feishu(msg, '📥')
                 state = state_mark(state, code, tier)
@@ -431,12 +487,31 @@ def check_position(code, name, market, cfg, state):
 
 # ─── 候选股监控 ───────────────────────────────────────────────────────────
 def check_watched(code, name, market, cfg, state):
-    """候选股：建仓触发 (entry_max) / reversal / pullback"""
+    """候选股：建仓触发 (entry_max) / reversal / pullback
+
+    ── 2026-11-11 改造：状态语义 → 穿越语义 ──────────────────────────────
+    旧逻辑：reversal 型判「现价 >= entry_max」= 状态判断。后果有两类，都实测到：
+      (a) 长期站在触发位之上的票（300629/159869/159928/512480）每天重推一遍
+          「反弹确认」—— 状态重置（state 按交易日重置）后就再推一次，纯噪音；
+      (b) 已经在接货区上方的票还会推「请确认建仓」—— 300629 台账明写
+          「等回踩 17.3-17.5 接货，不追高」，但现价 18.43 仍被判为「站回17.5」，
+          等于推了一条追高信号。
+    新逻辑：判「穿越」—— 触发价是盘中被穿越的那一侧，且必须是从触发位另一侧
+      走过来的。entry_max 上方 = 上穿触发（reversal/new_theme）；
+      entry_max 下方 = 下穿触发（pullback）。
+      穿越方向由 prev（昨收）与触发位的关系决定：
+        prev < 触发位 且 现价/极值 >= 触发位  → 上穿 → 成立
+        prev >= 触发位 且 现价/极值 < 触发位  → 下穿 → 成立（pullback 回调）
+      「长期站在上方」= prev >= 触发位 且 现价仍 >= 触发位 → 无穿越 → 不推。
+    极值口径与持仓统一走 resolve_extremes()（含防御校验 + 跨日守卫）。
+    """
     trigger_price = cfg.get('entry_max')
     ideal_price  = cfg.get('entry_min')
     rmn          = cfg.get('ratio_min', 0)
     sl           = cfg.get('stop_loss')
     sig_type     = cfg.get('signal_type', 'pullback')
+    # 观察型：只提示触达评估位，不推建仓指令（老大明确「观察不改档」的票）
+    observe_only = bool(cfg.get('observe_only')) or str(cfg.get('status', '')).startswith('cleared_')
 
     if trigger_price is None:
         return f'{name} 无 entry_max 跳过'
@@ -447,6 +522,21 @@ def check_watched(code, name, market, cfg, state):
 
     price = data['price']
     ratio = data['ratio']
+    prev  = data.get('prev') or price
+    up_price, down_price, day_high, day_low = resolve_extremes(data)
+    trigger_price = float(trigger_price)
+    prev_f = float(prev)
+
+    # ── 跨日守卫（候选股专属，比持仓更严）────────────────────────────────
+    # 穿越判定需要「昨收 prev」和「今日现价/极值」属于同一个交易日链条。
+    # 腾讯在盘前/非交易时段返回的是上一交易日的完整快照（quote_ts 形如
+    # 20261111161445），此时 price = 上一交易日收盘、prev = 上上一交易日收盘。
+    # 若拿它算穿越：明日开盘前会推出「昨天发生的上穿」= 过期信号。
+    # 故非今日快照一律不评估穿越。
+    quote_ts = str(data.get('quote_ts') or '')
+    if quote_ts[:8] != datetime.now().strftime('%Y%m%d'):
+        return (f'{name} {price:.2f}({data["chg_pct"]:+.2f}%) 行情快照非今日'
+                f'（{quote_ts or "无时间戳"}），暂不评估穿越')
 
     # watch 型：只观察不触发
     if sig_type == 'watch':
@@ -458,8 +548,36 @@ def check_watched(code, name, market, cfg, state):
     #       P0-15 四件套里 remove_triggers 定义了"收盘价 < stop_loss → 移出候选"，
     #       在止损位下方再喊"请确认建仓"是自相矛盾的信号（2026-10-23 09:30 英维克
     #       42.80 < SL 43.0、09:35 禾望电气 21.89 < SL 25.0 被推建仓信号）。
-    if sl and price <= float(sl):
+    # 2026-11-11：改用 down_price（当日最低）判定 —— 盘中破位后收回也要拦住，
+    #       否则「当日最低已破 SL」仍会被推建仓信号。
+    if sl and down_price <= float(sl):
         return f'{name} {price:.2f}({data["chg_pct"]:+.2f}%) 已破止损{sl}，不触发建仓'
+
+    # ── 穿越判定（状态语义 → 穿越语义）────────────────────────────────────
+    # 上穿：昨收在触发位下方，今日盘中/收盘已上到触发位或之上
+    cross_up   = (prev_f < trigger_price) and (up_price >= trigger_price)
+    # 下穿：昨收在触发位上方，今日盘中/收盘已下到触发位或之下
+    cross_down = (prev_f >= trigger_price) and (down_price < trigger_price)
+
+    def _price_label(direction):
+        """触发价展示：来自极值时写「当日最高/最低」，否则写「现价」
+
+        direction: 'up' 用当日最高，'down' 用当日最低 —— 必须与触发方向一致，
+        否则会出现「当日最高 1.240 下穿 1.22」这种方向自相矛盾的文案。
+        """
+        if direction == 'up' and up_price > price and abs(up_price - price) > 1e-9:
+            return f'当日最高 {up_price:.3f}'
+        if direction == 'down' and down_price < price and abs(down_price - price) > 1e-9:
+            return f'当日最低 {down_price:.3f}'
+        return f'现价 {price:.3f}'
+
+    _lbl_up = _price_label('up')
+    _lbl_down = _price_label('down')
+
+    def _emit(tier, msg):
+        send_feishu(msg, '✅')
+        st = state_mark(state, code, tier)
+        return msg, st
 
     # 坑 2：new_theme 型（status=waiting_observe）的触发方向是"涨到 entry_max"
     #       （距 60 日高点收窄至 -25% 内），不是"跌到 entry_max 以下"。
@@ -467,42 +585,45 @@ def check_watched(code, name, market, cfg, state):
     #       → 9/30 英维克 / 9/35 禾望电气 假建仓信号（两者都远在 entry_max 之下，
     #       涨到 82.86 / 50.25 才够到建仓评估位）。
     if sig_type == 'new_theme':
-        if price >= float(trigger_price) and ratio >= rmn:
+        if cross_up and ratio >= rmn:
             tier = 'new_theme'
             if state_should_trigger(state, code, tier):
-                msg = f'✅ {name} 达到建仓评估位！{price:.2f}({data["chg_pct"]:+.2f}%) ≥ {trigger_price}，五档比{ratio:.2f}'
+                msg = (f'✅ {name} 达到建仓评估位！{_lbl_up} ≥ {trigger_price:g}，'
+                       f'五档比{ratio:.2f}')
                 if sl: msg += f'，止损{sl}'
-                msg += '，请确认建仓'
-                send_feishu(msg, '✅')
-                state = state_mark(state, code, tier)
-                return msg, state
-        return f'{name} {price:.2f}({data["chg_pct"]:+.2f}%) 等待涨至{trigger_price}'
+                msg += '，请确认建仓' if not observe_only else '，（观察位触达，不构成下单指令）'
+                return _emit(tier, msg)
+        return f'{name} {price:.2f}({data["chg_pct"]:+.2f}%) 等待涨至{trigger_price:g}'
 
-    # reversal 型：反弹站回 entry_max
+    # reversal 型：反弹站回 entry_max（穿越语义：昨收在下方 → 今日上穿）
     if sig_type == 'reversal':
-        if price >= float(trigger_price) and ratio >= rmn:
+        if cross_up and ratio >= rmn:
             tier = 'reversal'
             if state_should_trigger(state, code, tier):
-                msg = f'✅ {name} 反弹确认！{price:.2f}({data["chg_pct"]:+.2f}%)站回{trigger_price}，五档比{ratio:.2f}'
+                msg = (f'✅ {name} 反弹确认！{_lbl_up}上穿{trigger_price:g}，'
+                       f'五档比{ratio:.2f}')
                 if sl: msg += f'，止损{sl}'
-                msg += '，请确认建仓'
-                send_feishu(msg, '✅')
-                state = state_mark(state, code, tier)
-                return msg, state
-        return f'{name} {price:.2f}({data["chg_pct"]:+.2f}%) 等反弹≥{trigger_price}'
+                msg += '，请确认建仓' if not observe_only else '，（观察位触达，不构成下单指令）'
+                return _emit(tier, msg)
+        if up_price >= trigger_price:
+            # 已在上方 —— 若不是今日上穿，就是「长期站上方」，不再重复推
+            return (f'{name} {price:.2f}({data["chg_pct"]:+.2f}%) 已在{trigger_price:g}上方'
+                    f'（非今日上穿，不重复提示）')
+        return f'{name} {price:.2f}({data["chg_pct"]:+.2f}%) 等反弹上穿{trigger_price:g}'
 
-    # pullback 型（默认）：回调到 entry_max 以下
-    if price <= float(trigger_price) and ratio >= rmn:
+    # pullback 型（默认）：回调到 entry_max 以下（穿越语义：昨收在上方 → 今日下穿）
+    if cross_down and ratio >= rmn:
         tier = 'pullback'
         if state_should_trigger(state, code, tier):
-            msg = f'✅ {name} 建仓信号！{price:.2f}({data["chg_pct"]:+.2f}%)，五档比{ratio:.2f}'
+            msg = (f'✅ {name} 建仓信号！{_lbl_down}下穿{trigger_price:g}，'
+                   f'五档比{ratio:.2f}')
             if sl: msg += f'，止损{sl}'
-            msg += '，请确认建仓'
-            send_feishu(msg, '✅')
-            state = state_mark(state, code, tier)
-            return msg, state
-
-    return f'{name} {price:.2f}({data["chg_pct"]:+.2f}%) 等待回调≤{trigger_price}'
+            msg += '，请确认建仓' if not observe_only else '，（观察位触达，不构成下单指令）'
+            return _emit(tier, msg)
+    if down_price < trigger_price:
+        return (f'{name} {price:.2f}({data["chg_pct"]:+.2f}%) 已在{trigger_price:g}下方'
+                f'（非今日下穿，不重复提示）')
+    return f'{name} {price:.2f}({data["chg_pct"]:+.2f}%) 等待回调下穿{trigger_price:g}'
 
 
 # ─── YAML 解析（最简版，避免依赖 PyYAML）──────────────────────────────────
