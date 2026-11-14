@@ -79,7 +79,7 @@ ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEtoOp/yemaVcmnE27F0UaAa1VozhaOFOIWTeqUqFjKo
 
 ### 扩容脚本（已实测可跑）
 
-**位置**：`/home/yu/.hermes/scripts/旁路由-overlay-扩容-sda4.sh`
+**位置**：`/home/yu/.hermes/scripts/_archive/旁路由-overlay-扩容-sda4.sh`（2026-11-12 已归档）
 
 **6 步流程**：
 1. `mkdir -p /mnt/new_overlay`
