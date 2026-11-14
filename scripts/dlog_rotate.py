@@ -84,9 +84,15 @@ def rotate(dry_run=False):
         for month, group_items in sorted(group(items).items()):
             p = ARCH / f'{key}_{month}.yaml'
             exist = yaml.safe_load(p.read_text()) if p.exists() else {}
-            merged = (exist.get(key) or []) + group_items
+            # 幂等：2026-11-13 修复前，脚本在「写归档成功、重建活文件前」崩溃，
+            # 归档里已存在这批条目；不跳过会写出重复条目。
+            seen = {yaml.safe_dump(it, allow_unicode=True, sort_keys=True)
+                    for it in (exist.get(key) or [])}
+            fresh = [it for it in group_items
+                     if yaml.safe_dump(it, allow_unicode=True, sort_keys=True) not in seen]
+            merged = (exist.get(key) or []) + fresh
             p.write_text(yaml.dump({key: merged}, allow_unicode=True, sort_keys=False, width=100))
-            written.append((p, key, group_items))
+            written.append((p, key, fresh))
 
     # 重建活文件：原文块拼回，零改写
     text = LOG.read_text()
@@ -106,8 +112,9 @@ def rotate(dry_run=False):
         if cur is not None:
             cur['text'] += l
     for sec in blocks:
-        m = re.search(r'^\s*date:\s*[\'"]?(\d{4}-\d{2}-\d{2})', b['text'], re.M)
-        b['date'] = m.group(1) if m else None
+        for b in blocks[sec]:
+            m = re.search(r'^\s*date:\s*[\'"]?(\d{4}-\d{2}-\d{2})', b['text'], re.M)
+            b['date'] = m.group(1) if m else None
     keep_text = {
         'records': [b['text'] for b in blocks['records'][-KEEP_RECORDS:]],
         'decisions': [b['text'] for b in blocks['decisions'][-KEEP_DECISIONS:]],
@@ -125,16 +132,52 @@ def rotate(dry_run=False):
     tmp.unlink()
 
     # 守恒 + 归档可读性
+    # ⚠️ 归档目录里本来就存放着【早前轮转已移出活文件】的条目，
+    #    所以「活文件条数 + 归档条数」不等于原始条数 —— 必须按【唯一条目集合】比。
+    def _ds(it):
+        return yaml.safe_dump(it, allow_unicode=True, sort_keys=True)
+
+    live_all = {_ds(it) for it in recs} | {_ds(it) for it in decs}
+    arch_before = set()
+    for key in ('records', 'decisions'):
+        for p in sorted(ARCH.glob(f'{key}_*.yaml')):
+            d = yaml.safe_load(p.read_text()) or {}
+            arch_before |= {_ds(it) for it in (d.get(key) or [])}
+    original_unique = live_all | arch_before
+
+    arch_after = set()
+    arch_count = 0
+    for key in ('records', 'decisions'):
+        for p in sorted(ARCH.glob(f'{key}_*.yaml')):
+            d = yaml.safe_load(p.read_text()) or {}
+            arch_count += len(d.get(key) or [])
+            arch_after |= {_ds(it) for it in (d.get(key) or [])}
+
     tot_keep = len(rec_keep) + len(dec_keep)
-    tot_arch = sum(len(it) for _, _, it in written)
-    assert tot_keep + tot_arch == len(recs) + len(decs), '条目不守恒'
+    keep_set = {_ds(it) for it in rec_keep} | {_ds(it) for it in dec_keep}
+
+    # 1) 溢出条目必须全部进了归档
+    overflow = {_ds(it) for it in rec_arch} | {_ds(it) for it in dec_arch}
+    assert overflow <= arch_after, '溢出条目未全部落归档'
+    # 2) 唯一条目集合守恒：活文件保留 ∪ 归档 == 原始（活文件 ∪ 归档）
+    assert keep_set | arch_after == original_unique, '唯一条目集合不守恒'
+    # 3) 归档内部无重复
+    assert arch_count == len(arch_after), f'归档内部有重复: {arch_count} vs {len(arch_after)}'
+    # 4) 活文件保留的条目必须都在原始集合里
+    assert keep_set <= original_unique, '活文件保留条目不在原始集合'
+
     for p, key, items in written:
         d = yaml.safe_load(p.read_text())
-        assert len(d[key]) == len(items), f'{p.name} 条数不符'
-    print('\n✅ 轮转完成: 活文件保留 %d 条 / 归档 %d 条 = 原始 %d 条' % (tot_keep, tot_arch, len(recs) + len(decs)))
+        assert len(d[key]) >= len(items), f'{p.name} 条数不符'
+        dumped = {_ds(it) for it in items}
+        have = {_ds(it) for it in d[key]}
+        assert dumped <= have, f'{p.name} 归档条目回查失败'
+
+    print('\n✅ 轮转完成: 活文件保留 %d 条 / 归档 %d 条（唯一 %d 条）'
+          % (tot_keep, arch_count, len(original_unique)))
     print('   活文件 %d bytes (原 %d)' % (LOG.stat().st_size, backup.stat().st_size))
     for p, key, items in written:
-        print(f'   {p.name:<38} {key:<9} +{len(items):>3} 条')
+        print(f'   {p.name:<38} {key:<9} 本轮新增 {len(items):>3} 条')
     return 0
 
 
