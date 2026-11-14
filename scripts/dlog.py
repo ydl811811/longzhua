@@ -37,6 +37,11 @@ def _date(x):
     return v.isoformat() if hasattr(v, 'isoformat') else str(v)
 
 
+def _ts(x):
+    """时间戳兼容：历史条目部分写 ts、部分写 time（如 tp_exec.py / manual_sell_exec.py）。"""
+    return str(x.get('ts') or x.get('time') or '')
+
+
 def _load(path):
     d = yaml.safe_load(path.read_text())
     if not isinstance(d, dict):
@@ -65,11 +70,11 @@ def cmd_recent(argv):
     if '--key' in argv:
         key = argv[argv.index('--key') + 1]
     items = load_all(key)
-    items.sort(key=lambda t: (_date(t[0]), str(t[0].get('ts', ''))))
+    items.sort(key=lambda t: (_date(t[0]), _ts(t[0])))
     out = []
     for it, src in items[-n:]:
         out.append(
-            f"[{_date(it)} {it.get('ts', '?')}] code={it.get('code', '?')} "
+            f"[{_date(it)} {_ts(it) or '?'}] code={it.get('code', '?')} "
             f"src={src}\n  topic: {str(it.get('topic', ''))[:200]}\n"
             f"  decision: {str(it.get('decision', ''))[:300]}"
         )
@@ -106,7 +111,7 @@ def cmd_month(argv):
             found = True
             print(f'=== {p.name} ({len(d.get(key, []))} 条) ===')
             for it in d.get(key, []):
-                print(f"  {_date(it)} {it.get('ts', '?')} code={it.get('code', '?')} "
+                print(f"  {_date(it)} {_ts(it) or '?'} code={it.get('code', '?')} "
                       f"{str(it.get('topic', ''))[:120]}")
     if not found:
         # 落在活文件窗口内的月份
@@ -114,7 +119,7 @@ def cmd_month(argv):
             for it, src in load_all(key):
                 if _date(it)[:7] == m:
                     found = True
-                    print(f"  [LIVE] {_date(it)} {it.get('ts', '?')} code={it.get('code', '?')} "
+                    print(f"  [LIVE] {_date(it)} {_ts(it) or '?'} code={it.get('code', '?')} "
                           f"{str(it.get('topic', ''))[:120]}")
     if not found:
         print(f'(归档无 {m} 的条目)')
