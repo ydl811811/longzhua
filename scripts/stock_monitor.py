@@ -11,7 +11,7 @@
 监控逻辑：
 1. 持仓：止损 (stop_loss) / 观察线 (watch_line) / TP1/TP2/TP3 / 补仓位 (add_position_1/2_target)
 2. 候选股：建仓触发 (entry_max) / 反弹型 (reversal) / 回调型 (pullback) / 观察型 (watch)
-3. 单只股单维度每日只触发一次（写入 state file）
+3. 条件成立即推送（2026-11-18 起取消「当日重复触发静默」；state file 只留痕、不参与抑制）
 
 交易时段过滤：
 - A 股: 9:30-11:30 + 13:00-15:00
@@ -193,14 +193,14 @@ def state_save(s):
 
 
 def state_should_trigger(state, code, tier):
-    """同一交易日同一标的同一维度只触发一次"""
-    today = datetime.now().strftime('%Y-%m-%d')
-    if state.get('date') != today:
-        # 新一天 → 重置
-        state = {'date': today, 'triggered': {}}
-    triggered = state['triggered'].get(code, [])
-    return tier not in triggered
+    """放行判定 —— 2026-11-18 起：条件成立即推送，取消「当日重复触发静默」。
 
+    旧语义：同一交易日 + 同一标的 + 同一维度当日只放行一次（当日触发过就静默）。
+    新语义：**条件成立就推送**，不再拿「当日是否已推过」当抑制条件。
+    state 文件仍按原形状写 {'date': str, 'triggered': {code: [tier, ...]}}，
+    triggered 仅作留痕（排障时看今天推过哪些维度），**不参与放行判断**。
+    """
+    return True
 
 def state_mark(state, code, tier):
     today = datetime.now().strftime('%Y-%m-%d')
@@ -608,11 +608,18 @@ def check_watched(code, name, market, cfg, state):
         if up_price >= trigger_price:
             # 已在上方 —— 若不是今日上穿，就是「长期站上方」，不再重复推
             return (f'{name} {price:.2f}({data["chg_pct"]:+.2f}%) 已在{trigger_price:g}上方'
-                    f'（非今日上穿，不重复提示）')
+                    f'（非今日上穿，不构成触发）')
         return f'{name} {price:.2f}({data["chg_pct"]:+.2f}%) 等反弹上穿{trigger_price:g}'
 
     # pullback 型（默认）：回调到 entry_max 以下（穿越语义：昨收在上方 → 今日下穿）
-    if cross_down and ratio >= rmn:
+    #
+    # 2026-11-19：加「接货价闸门」——当日最低曾下穿触发位，但现价已回到触发位
+    #   上方时，不出建仓指令。否则推的就是一条追高信号：11-19 001358 当日最低
+    #   24.29 < 触发位 25.00（穿越成立），而现价已回到 27.51，此时按当日最低
+    #   判定会反复推「建仓信号！当日最低 24.290 下穿 25.000」＝让老大在 27.5
+    #   追高，实际接货区是 24.50-25.00。
+    #   判据：现价必须仍在触发位之下（= 现价真在接货区里），才允许出建仓指令。
+    if cross_down and price <= trigger_price and ratio >= rmn:
         tier = 'pullback'
         if state_should_trigger(state, code, tier):
             msg = (f'✅ {name} 建仓信号！{_lbl_down}下穿{trigger_price:g}，'
@@ -620,9 +627,12 @@ def check_watched(code, name, market, cfg, state):
             if sl: msg += f'，止损{sl}'
             msg += '，请确认建仓' if not observe_only else '，（观察位触达，不构成下单指令）'
             return _emit(tier, msg)
+    if cross_down and price > trigger_price:
+        return (f'{name} {price:.2f}({data["chg_pct"]:+.2f}%) 当日最低 {down_price:.3f} 曾下穿'
+                f'{trigger_price:g}，但现价已回到触发位上方（非有效接货位，不构成建仓触发）')
     if down_price < trigger_price:
         return (f'{name} {price:.2f}({data["chg_pct"]:+.2f}%) 已在{trigger_price:g}下方'
-                f'（非今日下穿，不重复提示）')
+                f'（非今日下穿，不构成触发）')
     return f'{name} {price:.2f}({data["chg_pct"]:+.2f}%) 等待回调下穿{trigger_price:g}'
 
 
