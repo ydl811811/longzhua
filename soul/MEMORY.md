@@ -14,8 +14,9 @@
 ## 灵爪搬家教训（2026-09-13 老大说"落 memory"）
 
 详见 `01-laoda-identity.md`（沟通纪律条目："服务看着跑"≠"服务正常" + "身份判断三件套"）+ `02-network.md`（§OpenClaw 操作纪律 + 网络操作教训表 2026-09-13 一行）。**核心**：搬家 / 路径变更 / OpenClaw update 后，必须 ① `openclaw gateway stop` ② 搬数据 ③ 软链 ④ `openclaw gateway start` ⑤ `openclaw doctor --fix` ⑥ `openclaw gateway start` ⑦ **真发飞书消息端到端验证**。
-
 §
+## 预警推送规则（2026-11-18 老大当面定）
+取消「当日重复触发静默」：条件成立即推送预警，不再按当日已推维度静默；state file 只留痕不抑制。
 
 ## 龙爪自我身份（2026-09-13 老大当面纠正后固化）
 
