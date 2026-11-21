@@ -4,7 +4,7 @@
 159299 金融科技ETF 收盘一次性监控 — A 方案
 - 每天 15:35 跑一次（避开 15:00 收盘竞价 + 让收盘价稳定）
 - 命中推飞书 webhook；无命中静默（看 watchdog 模式）
-- 单只单维度每日只推一次（state file 控制）
+- 条件成立即推（2026-11-18 起取消当日去重，state file 只留痕）
 
 监控信号：
   1. 收盘 ≥ 0.72 → E1 突破加仓信号（试探仓 5000→7000 份）
@@ -65,7 +65,7 @@ FEISHU_BOT_URL, FEISHU_BOT_SECRET = load_feishu_creds()
 
 
 
-# ─── State 管理（单日单维度去重）──────────────────────────────────
+# ─── State 管理（只留痕，不做当日去重）──────────────────────────────────
 def load_state():
     if not os.path.exists(STATE_FILE):
         return {}
@@ -84,10 +84,12 @@ def save_state(state):
 
 
 def should_trigger(state, signal_type):
-    """同日同信号只触发一次"""
-    today = datetime.now().strftime('%Y-%m-%d')
-    return state.get(signal_type) != today
+    """放行判定 —— 2026-11-18 起：条件成立即推送，取消「当日重复触发静默」。
 
+    旧语义：同日同信号只触发一次（state file 记日期）。
+    新语义：条件成立就推送。state 仍写入（留痕），不再当抑制条件。
+    """
+    return True
 
 def mark_triggered(state, signal_type):
     state[signal_type] = datetime.now().strftime('%Y-%m-%d')
@@ -186,7 +188,7 @@ def main():
             mark_triggered(state, 'candidate_breakout')
             triggered.append('candidate_breakout')
         else:
-            print(f'[SKIP] candidate_breakout 今日已推送过（{close_price} ≥ {CANDIDATE_BREAKOUT}）')
+            pass  # 2026-11-18 起不再当日去重，恒真分支
     else:
         # 收盘未站上，重置状态（次日才能再推）
         if state.get('candidate_breakout'):
@@ -206,7 +208,7 @@ def main():
             mark_triggered(state, 'bottom_break')
             triggered.append('bottom_break')
         else:
-            print(f'[SKIP] bottom_break 今日已推送过（{close_price} < {BOTTOM_BREAK}）')
+            pass  # 2026-11-18 起不再当日去重，恒真分支
     else:
         if not is_holding:
             print(f'[SKIP] bottom_break 不适用（159299 非持仓，破底提醒仅对持仓有效）')
