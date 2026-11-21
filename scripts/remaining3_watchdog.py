@@ -17,7 +17,7 @@
   减亏线 = 反弹到均线，减亏离场提醒（黄）—— 不是加仓信号
 
 watchdog 模式：无触发时 stdout 为空 = 静默不推送。
-每只票每条线每日只推一次（state file 去重）。
+每只票每条线：条件成立即推（2026-11-18 起取消当日去重，state file 只留痕）。
 
 数据源：腾讯 qt.gtimg.cn 实时（复用 stock_monitor.py 的 fetch_stock / send_feishu）
 """
@@ -209,7 +209,7 @@ def main():
 
         # 1. 离场线（破位/止损）→ 清仓提醒
         ek = f'exit_{cfg["exit_line"]}'
-        if price <= cfg['exit_line'] and ek not in fired:
+        if price <= cfg['exit_line']:
             msg = (f'🔴 {cfg["name"]} {code} 破离场线 {cfg["exit_label"]}！\n'
                    f'现价 {price:.3f} ≤ {cfg["exit_line"]}（{data["chg_pct"]:+.2f}%，五档比 {data["ratio"]:.2f}）\n'
                    f'持仓 {sh} 份 @ 成本 {cost}，浮亏 {pnl_pct:+.1f}%\n'
@@ -221,7 +221,7 @@ def main():
         # 2. 减亏线（反弹到均线）→ 减亏离场提醒
         for lv, tag in cfg['relief_lines']:
             rk = f'relief_{lv}'
-            if price >= lv and rk not in fired:
+            if price >= lv:
                 gain = (price / cost - 1) * 100 if cost else 0
                 msg = (f'🟡 {cfg["name"]} {code} 反弹到 {tag} {lv:.3f}！\n'
                        f'现价 {price:.3f}（{data["chg_pct"]:+.2f}%，五档比 {data["ratio"]:.2f}）\n'
